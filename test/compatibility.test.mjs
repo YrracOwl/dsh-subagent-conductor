@@ -3,50 +3,54 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MARKER_KEY, findRootSessionId, isSubagent, makeMarker, readMarker } from '../lib/config.js'
+import { findRootSessionId, isSubagent } from '../lib/config.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-// These three tests inspect the locally installed DSH implementation. A public
-// package CI runner has no DSH checkout, so require an explicit opt-in path and
-// skip only those white-box checks when it is unavailable. Never guess a host
-// path: on POSIX, a Windows path would become a bogus relative path.
+// These DSH white-box tests inspect the locally installed DSH implementation.
+// A public package CI runner has no DSH checkout, so require an explicit
+// opt-in path and skip only those checks when it is unavailable. Never guess
+// a host path: on POSIX, a Windows path would become a bogus relative path.
 const dshRoot = typeof process.env.DSH_CHECKOUT === 'string' && process.env.DSH_CHECKOUT.length > 0
   ? path.resolve(process.env.DSH_CHECKOUT)
   : undefined
-const childAgent = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-subagent/lib/types/child-agent.js')
-const continuation = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation.js')
-const descriptor = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-subagent/lib/types/descriptor.js')
+const subagentImpl = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-subagent/lib/index.js')
+const agentImpl = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-agent/lib/index.js')
 const readDshFile = (file) => file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined
 
-test('stock child option resolver spreads requested marker before depth', { skip: !childAgent || !fs.existsSync(childAgent) }, () => {
-  const source = readDshFile(childAgent)
-  assert.match(source, /\.\.\.requested,[\s\S]*subagentDepth:\s*childDepth/)
+test('DSH resolves the child AgentOptions route at creation (official layer source)', { skip: !subagentImpl || !fs.existsSync(subagentImpl) }, () => {
+  const source = readDshFile(subagentImpl)
+  // Provider/model (and effort when supplied) become child options before the
+  // first request; the Host conductor reads that snapshot as the official
+  // layer. Explicit model-facing choices and tool-instance defaults both land
+  // here, so the listener never needs a private marker.
+  assert.match(source, /resolveChildAgentOptions\(parent, request\.agentOptions, childDepth\)/)
+  assert.match(source, /agentProvider = agentOptions\.provider/)
+  assert.match(source, /agentReasoningEffort = agentOptions\.reasoningEffort/)
+  assert.doesNotMatch(source, /__dshSubagentConductor/)
 })
 
-test('cold resume reconstructs only descriptor provider and model', { skip: !continuation || !fs.existsSync(continuation) }, () => {
-  const source = readDshFile(continuation)
-  assert.match(source, /agentOptions:\s*\{[\s\S]*descriptor\.agentProvider[\s\S]*descriptor\.agentModel[\s\S]*\}/)
-  assert.match(source, /composition:\s*\{\s*persona:\s*descriptor\.persona,\s*toolFilter:\s*descriptor\.toolFilter\s*\}/)
-  assert.doesNotMatch(source.slice(source.indexOf('async coldResume'), source.indexOf('async submitMaterialized')), new RegExp(MARKER_KEY))
+test('DSH dispatches agent/request as a waterfall with resolved config', { skip: !agentImpl || !fs.existsSync(agentImpl) }, () => {
+  const source = readDshFile(agentImpl)
+  assert.match(source, /agentCtx\.on\("agent\/request", async \(_payload, next\) => \{/)
+  assert.match(source, /const resolved = await next\(\)/)
 })
 
-test('continuable descriptor rejects unknown keys', { skip: !descriptor || !fs.existsSync(descriptor) }, () => {
-  const source = readDshFile(descriptor)
-  assert.match(source, /CONTINUABLE_DESCRIPTOR_KEYS/)
-  assert.match(source, /assertKnownKeys\(value, mode === ['"]one-shot['"] \? ONE_SHOT_DESCRIPTOR_KEYS : CONTINUABLE_DESCRIPTOR_KEYS/)
+test('conductor source carries no private marker or delegation tool', () => {
+  const index = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const config = fs.readFileSync(new URL('../lib/config.js', import.meta.url), 'utf8')
+  const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  for (const source of [index, config, client]) {
+    assert.doesNotMatch(source, /__dshSubagentConductor|MARKER_KEY|makeMarker|readMarker|subagent_direct/)
+    assert.doesNotMatch(source, /ctx\.subagents\.start\s*=|ctx\.subagents\.startContinuable\s*=/)
+  }
 })
 
-test('private marker is readable for a fresh resident child', () => {
-  const marker = makeMarker({ role: 'reviewer', provider: 'p', model: 'm', reasoningEffort: 'high' })
-  const agent = { options: { subagentDepth: 1, [MARKER_KEY]: marker }, session: { header: { origin: 'subagent' } } }
-  assert.deepEqual(readMarker(agent), marker)
-  assert.equal(isSubagent(agent), true)
-})
-
-test('cold-resumed child is detected by origin without depth or marker', () => {
+test('cold-resumed and fresh children are detected by origin without any marker', () => {
   const agent = { options: { provider: 'p', model: 'm' }, session: { header: { origin: 'subagent' } } }
-  assert.equal(readMarker(agent), undefined)
   assert.equal(isSubagent(agent), true)
+  assert.equal(isSubagent({ options: { subagentDepth: 1 }, session: { header: { origin: 'session' } } }), true)
+  assert.equal(isSubagent({ options: {}, session: { header: { origin: 'session' } } }), false)
+  assert.equal(isSubagent({ options: {}, session: { header: { id: 'root' } } }), false)
 })
 
 test('nested child resolves the non-subagent root and detects cycles', () => {

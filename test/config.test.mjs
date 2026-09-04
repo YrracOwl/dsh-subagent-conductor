@@ -3,129 +3,130 @@ import assert from 'node:assert/strict'
 import {
   DEFAULT_SETTINGS,
   applyResolvedRoute,
-  isFreshSubagent,
+  decideRequestRoute,
   normalizeReasoningEffort,
   normalizeSettings,
   resolveRoute,
+  validateSettings,
 } from '../lib/config.js'
 
-test('resolves call over role over session over default per field', () => {
+test('resolves session over default role over global default per field', () => {
   const result = resolveRoute({
-    marker: { role: 'reviewer', call: { model: 'call-model' } },
     session: { provider: 'session-provider', model: 'session-model', reasoningEffort: 'low' },
     settings: {
       defaultRoute: { provider: 'default-provider', model: 'default-model', reasoningEffort: 'off' },
-      roles: { reviewer: { displayName: 'Reviewer', description: 'Review', provider: 'role-provider', reasoningEffort: 'high' } },
-    },
-    applyDefaultRole: true,
-  })
-  assert.equal(result.provider, 'role-provider')
-  assert.equal(result.model, 'call-model')
-  assert.equal(result.reasoningEffort, 'high')
-  assert.deepEqual(result.provenance, { provider: 'role', model: 'call', reasoningEffort: 'role' })
-})
-
-test('defaultRole routes a fresh stock child with no marker', () => {
-  const result = resolveRoute({
-    marker: undefined,
-    session: undefined,
-    settings: {
       defaultRole: 'reviewer',
-      roles: { reviewer: { displayName: 'Reviewer', description: 'Review', provider: 'role-provider', model: 'role-model' } },
+      roles: { reviewer: { displayName: 'Reviewer', description: 'Review', provider: 'role-provider', model: 'role-model', reasoningEffort: 'high' } },
     },
-    applyDefaultRole: true,
   })
-  assert.equal(result.provider, 'role-provider')
-  assert.equal(result.model, 'role-model')
+  assert.equal(result.provider, 'session-provider')
+  assert.equal(result.model, 'session-model')
+  assert.equal(result.reasoningEffort, 'low')
+  assert.deepEqual(result.provenance, { provider: 'session', model: 'session', reasoningEffort: 'session' })
   assert.equal(result.roleId, 'reviewer')
-  assert.equal(result.provenance.provider, 'role')
 })
 
-test('explicit role marker wins over defaultRole', () => {
+test('fields resolve independently across conductor layers', () => {
   const result = resolveRoute({
-    marker: { role: 'writer' },
-    session: undefined,
-    settings: {
-      defaultRole: 'reviewer',
-      roles: {
-        reviewer: { displayName: 'Reviewer', description: 'Review', provider: 'reviewer-provider', model: 'reviewer-model' },
-        writer: { displayName: 'Writer', description: 'Write', provider: 'writer-provider', model: 'writer-model' },
-      },
-    },
-    applyDefaultRole: true,
-  })
-  assert.equal(result.provider, 'writer-provider')
-  assert.equal(result.model, 'writer-model')
-  assert.equal(result.roleId, 'writer')
-})
-
-test('explicit role marker is honored even when defaultRole policy is off', () => {
-  const result = resolveRoute({
-    marker: { role: 'reviewer' },
     session: { provider: 'session-provider' },
     settings: {
-      defaultRoute: { provider: 'default-provider', model: 'default-model' },
+      defaultRoute: { model: 'default-model', reasoningEffort: 'off' },
+      defaultRole: 'reviewer',
+      roles: { reviewer: { displayName: 'Reviewer', description: 'Review', reasoningEffort: 'high' } },
+    },
+  })
+  assert.equal(result.provider, 'session-provider')
+  assert.equal(result.model, 'default-model')
+  assert.equal(result.reasoningEffort, 'high')
+  assert.deepEqual(result.provenance, { provider: 'session', model: 'default', reasoningEffort: 'role' })
+})
+
+test('default role routes a subagent when no session selection exists', () => {
+  const result = resolveRoute({
+    session: undefined,
+    settings: {
+      defaultRole: 'reviewer',
       roles: { reviewer: { displayName: 'Reviewer', description: 'Review', provider: 'role-provider', model: 'role-model' } },
     },
-    applyDefaultRole: false,
   })
   assert.equal(result.provider, 'role-provider')
   assert.equal(result.model, 'role-model')
   assert.equal(result.roleId, 'reviewer')
+  assert.deepEqual(result.provenance, { provider: 'role', model: 'role', reasoningEffort: 'inherit' })
 })
 
-test('cold resume suppresses defaultRole and falls back to session then default', () => {
-  const settings = {
-    defaultRole: 'reviewer',
-    defaultRoute: { provider: 'default-provider', model: 'default-model' },
-    roles: { reviewer: { displayName: 'Reviewer', description: 'Review', provider: 'role-provider', model: 'role-model' } },
-  }
-  const withSession = resolveRoute({
-    marker: undefined,
-    session: { provider: 'session-provider', model: 'session-model' },
-    settings,
-    applyDefaultRole: false,
+test('global default applies when neither session nor role defines a route', () => {
+  const result = resolveRoute({
+    session: undefined,
+    settings: { defaultRoute: { provider: 'default-provider', model: 'default-model', reasoningEffort: 'off' } },
   })
-  assert.equal(withSession.provider, 'session-provider')
-  assert.equal(withSession.model, 'session-model')
-  assert.equal(withSession.roleId, undefined)
-  assert.deepEqual(withSession.provenance, { provider: 'session', model: 'session', reasoningEffort: 'inherit' })
-  const withoutSession = resolveRoute({ marker: undefined, session: undefined, settings, applyDefaultRole: false })
-  assert.equal(withoutSession.provider, 'default-provider')
-  assert.equal(withoutSession.model, 'default-model')
-  assert.equal(withoutSession.roleId, undefined)
-  assert.deepEqual(withoutSession.provenance, { provider: 'default', model: 'default', reasoningEffort: 'inherit' })
+  assert.equal(result.provider, 'default-provider')
+  assert.equal(result.model, 'default-model')
+  assert.equal(result.reasoningEffort, 'off')
 })
 
-test('fresh and cold-resume children are identified explicitly for the defaultRole policy', () => {
-  assert.equal(isFreshSubagent({ options: { subagentDepth: 1 }, session: { header: { origin: 'subagent' } } }), true)
-  assert.equal(isFreshSubagent({ options: { subagentDepth: 2 }, session: { header: { origin: 'subagent' } } }), true)
-  assert.equal(isFreshSubagent({ options: {}, session: { header: { origin: 'subagent' } } }), false)
-  assert.equal(isFreshSubagent({ options: { provider: 'p', model: 'm' }, session: { header: { origin: 'subagent' } } }), false)
-  assert.equal(isFreshSubagent({ options: { subagentDepth: 0 }, session: { header: { origin: 'subagent' } } }), false)
+test('empty conductor layers leave provenance inherit and decideRequestRoute silent', () => {
+  const conductor = resolveRoute({ session: undefined, settings: {} })
+  assert.equal(conductor.provider, undefined)
+  assert.equal(conductor.model, undefined)
+  assert.equal(conductor.reasoningEffort, undefined)
+  assert.deepEqual(conductor.provenance, { provider: 'inherit', model: 'inherit', reasoningEffort: 'inherit' })
+  assert.equal(decideRequestRoute({ provider: 'a', model: 'x' }, conductor, { provider: 'a', model: 'x' }), undefined)
 })
 
-test('resolveRoute requires the explicit applyDefaultRole policy', () => {
-  assert.throws(
-    () => resolveRoute({ marker: undefined, session: undefined, settings: {} }),
-    /explicit applyDefaultRole/,
-  )
+test('conductor route wins over the official creation-time route', () => {
+  const conductor = resolveRoute({ session: { provider: 'p', model: 'm' }, settings: {} })
+  const intent = decideRequestRoute({ provider: 'a', model: 'x', reasoningEffort: 'high' }, conductor, { provider: 'a', model: 'x', reasoningEffort: 'high' })
+  assert.deepEqual(intent, { provider: 'p', model: 'm' })
 })
 
-test('fallbackOnInvalid is fully removed as a dead setting', () => {
-  assert.ok(!('fallbackOnInvalid' in DEFAULT_SETTINGS))
-  const normalized = normalizeSettings({ fallbackOnInvalid: false, defaultRoute: { provider: 'p', model: 'm' } })
-  assert.ok(!('fallbackOnInvalid' in normalized))
-  assert.deepEqual(normalized.defaultRoute, { provider: 'p', model: 'm' })
+test('conductor effort alone keeps the official route', () => {
+  const conductor = resolveRoute({ settings: { defaultRoute: { reasoningEffort: 'low' } } })
+  const intent = decideRequestRoute({ provider: 'a', model: 'x', reasoningEffort: 'high' }, conductor, { provider: 'a', model: 'x' })
+  assert.deepEqual(intent, { provider: 'a', model: 'x', conductorEffort: 'low' })
 })
 
-test('normalization drops invalid session selections', () => {
-  const value = normalizeSettings({ sessionSelections: { ok: { provider: 'p', model: 'm' }, bad: { provider: 'p' } } })
+test('official route falls back to base when options omit provider/model', () => {
+  const conductor = resolveRoute({ settings: { defaultRoute: { reasoningEffort: 'low' } } })
+  const intent = decideRequestRoute({ provider: 'a', model: 'x' }, conductor, {})
+  assert.deepEqual(intent, { provider: 'a', model: 'x', conductorEffort: 'low' })
+})
+
+test('missing effective provider or model yields no intent', () => {
+  const conductor = resolveRoute({ settings: { defaultRoute: { reasoningEffort: 'low' } } })
+  assert.equal(decideRequestRoute({}, conductor, {}), undefined)
+})
+
+test('normalization drops v1-only keys and invalid session selections', () => {
+  const value = normalizeSettings({
+    subagentProvider: 'spawn', maxDepth: 3, enableRunInBackground: false, backgroundMode: 'continuable',
+    defaultRoute: { provider: 'p', model: 'm' },
+    roles: { ok: { displayName: 'Ok', description: 'Fine', persona: 'ignored', toolFilter: { allow: ['read'] } } },
+    sessionSelections: { ok: { provider: 'p', model: 'm' }, bad: { provider: 'p' } },
+  })
+  assert.equal('subagentProvider' in value, false)
+  assert.equal('maxDepth' in value, false)
+  assert.equal('enableRunInBackground' in value, false)
+  assert.equal('backgroundMode' in value, false)
+  assert.deepEqual(value.defaultRoute, { provider: 'p', model: 'm' })
+  assert.deepEqual(value.roles.ok, { displayName: 'Ok', description: 'Fine' })
   assert.deepEqual(value.sessionSelections, { ok: { provider: 'p', model: 'm' } })
+  assert.ok(!('fallbackOnInvalid' in DEFAULT_SETTINGS))
+})
+
+test('validateSettings rejects a defaultRole that does not exist', () => {
+  assert.throws(
+    () => validateSettings({ defaultRole: 'missing', roles: {} }),
+    /defaultRole "missing" does not exist/,
+  )
 })
 
 test('provider/model switch atomically clears inherited effort', () => {
   assert.deepEqual(applyResolvedRoute({ provider: 'a', model: 'x', reasoningEffort: 'high', maxTokens: 10 }, { provider: 'b', model: 'y' }), { provider: 'b', model: 'y', maxTokens: 10 })
+})
+
+test('same-route effort replacement keeps provider and model', () => {
+  assert.deepEqual(applyResolvedRoute({ provider: 'a', model: 'x', reasoningEffort: 'high' }, { provider: 'a', model: 'x' }, 'low'), { provider: 'a', model: 'x', reasoningEffort: 'low' })
 })
 
 test('effort is accepted only from exact model metadata', () => {

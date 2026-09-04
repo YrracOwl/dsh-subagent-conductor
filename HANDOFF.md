@@ -1,5 +1,9 @@
 # dsh-subagent-conductor 完整交接计划
 
+> ## 状态：已被 v0.2 取代（历史档案）
+> 本文件记录 0.1.x（自有 `subagent_direct` 工具 + 私有 AgentOptions marker + rc.8 契约束）的交接与验收计划，仅作历史保留。
+> v0.2 已实现并发布：面向官方 subagent 工具的**设置与默认路由层**（契约见 `docs/design.md`、`README.md`、`AGENTS.md`）。0.1.x 语义（调用期角色、marker、冷恢复降级、persona/toolFilter 运行时注入、传输/深度/后台设置）不再成立，请勿按本文件实现。
+
 ## 0. 交接状态
 
 - 目标目录：`D:\Resources\DSH_PRJ\DevPlugins\dsh-subagent-conductor`
