@@ -38,6 +38,8 @@ test('client follows the one-argument ModuleLoader factory contract', () => {
 
 test('client registers official slots and removes its style', () => {
   assert.match(client, /conversation\.input\.right/)
+  assert.match(client, /\(props\) => e\(Selector, \{ \.\.\.props, api, scope \}\)/)
+  assert.doesNotMatch(client, /inject: \(sessionId\) => \(\{ sessionId, api, scope \}\)/)
   assert.match(client, /settings\.plugin\.item/)
   assert.match(client, /ctx\.effect\(\(\) => \(\) => style\.remove\(\)/)
   assert.doesNotMatch(client, /214748/)
