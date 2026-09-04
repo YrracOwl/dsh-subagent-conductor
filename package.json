@@ -1,7 +1,7 @@
 {
   "name": "dsh-subagent-conductor",
   "version": "0.1.1",
-  "description": "Lifecycle-safe subagent provider, model, and reasoning-effort routing with per-session controls and role-based delegation for DeepSeek Harness.",
+  "description": "EN: Lifecycle-safe subagent provider, model, effort routing, and role controls for DeepSeek Harness Web. ZH: 面向 DeepSeek Harness Web 的生命周期安全子代理路由、角色与会话控制。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

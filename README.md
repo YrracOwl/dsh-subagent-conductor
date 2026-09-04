@@ -1,5 +1,13 @@
 # dsh-subagent-conductor
 
+## English
+
+Lifecycle-safe subagent routing for DeepSeek Harness Web. It provides per-session provider/model/reasoning-effort selection, role templates, root-session controls, and a dedicated delegation tool without patching DSH or replacing stock subagent tools. DSH 0.1.2+ fine-grained remotes are preferred, with the legacy connection API retained as a compatibility fallback.
+
+## 中文
+
+面向 DeepSeek Harness Web 的生命周期安全子代理路由插件：支持按会话选择 provider、model、reasoning effort，提供角色模板、根会话控制和独立委派工具；不修改 DSH，也不替换原生 subagent 工具。DSH 0.1.2+ 优先使用细粒度 remote，旧版自动回退到 connection API。
+
 Lifecycle-safe subagent routing for DeepSeek Harness: per-session provider/model/reasoning-effort selection, role templates, main-agent guidance, and a dedicated delegation Tool.
 
 The package uses the official `agent/request` waterfall and does not patch DSH or replace stock `subagent` / `subagent_fork` tools.
