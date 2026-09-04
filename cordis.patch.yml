@@ -1,0 +1,5 @@
+# dsh-subagent-conductor bundle patch.
+# Host-plane single instance: do not copy this row into an agent preset.
+- insert:
+    - id: subagent-conductor
+      name: 'dsh-subagent-conductor'
