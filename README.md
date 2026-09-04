@@ -2,6 +2,8 @@
 
 ## English
 
+**Current release: 0.1.2** — Fine-grained Remote APIs are capability-detected and optional, so older DSH RC hosts continue to start the plugin.
+
 Lifecycle-safe subagent routing for DeepSeek Harness Web. It provides per-session provider/model/reasoning-effort selection, role templates, root-session controls, and a dedicated delegation tool without patching DSH or replacing stock subagent tools. DSH 0.1.2+ fine-grained remotes are preferred, with the legacy connection API retained as a compatibility fallback.
 
 ## 中文
