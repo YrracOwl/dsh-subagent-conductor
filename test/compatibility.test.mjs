@@ -6,25 +6,32 @@ import { fileURLToPath } from 'node:url'
 import { MARKER_KEY, findRootSessionId, isSubagent, makeMarker, readMarker } from '../lib/config.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const dsh = path.resolve(process.env.DSH_CHECKOUT || 'C:/Users/CarryWho/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh')
-const childAgent = path.join(dsh, 'node_modules/@deepseek-ai/dsh-subagent/lib/types/child-agent.js')
-const continuation = path.join(dsh, 'node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation.js')
-const descriptor = path.join(dsh, 'node_modules/@deepseek-ai/dsh-subagent/lib/types/descriptor.js')
+// These three tests inspect the locally installed DSH implementation. A public
+// package CI runner has no DSH checkout, so require an explicit opt-in path and
+// skip only those white-box checks when it is unavailable. Never guess a host
+// path: on POSIX, a Windows path would become a bogus relative path.
+const dshRoot = typeof process.env.DSH_CHECKOUT === 'string' && process.env.DSH_CHECKOUT.length > 0
+  ? path.resolve(process.env.DSH_CHECKOUT)
+  : undefined
+const childAgent = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-subagent/lib/types/child-agent.js')
+const continuation = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation.js')
+const descriptor = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-subagent/lib/types/descriptor.js')
+const readDshFile = (file) => file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined
 
-test('stock child option resolver spreads requested marker before depth', () => {
-  const source = fs.readFileSync(childAgent, 'utf8')
+test('stock child option resolver spreads requested marker before depth', { skip: !childAgent || !fs.existsSync(childAgent) }, () => {
+  const source = readDshFile(childAgent)
   assert.match(source, /\.\.\.requested,[\s\S]*subagentDepth:\s*childDepth/)
 })
 
-test('cold resume reconstructs only descriptor provider and model', () => {
-  const source = fs.readFileSync(continuation, 'utf8')
+test('cold resume reconstructs only descriptor provider and model', { skip: !continuation || !fs.existsSync(continuation) }, () => {
+  const source = readDshFile(continuation)
   assert.match(source, /agentOptions:\s*\{[\s\S]*descriptor\.agentProvider[\s\S]*descriptor\.agentModel[\s\S]*\}/)
   assert.match(source, /composition:\s*\{\s*persona:\s*descriptor\.persona,\s*toolFilter:\s*descriptor\.toolFilter\s*\}/)
   assert.doesNotMatch(source.slice(source.indexOf('async coldResume'), source.indexOf('async submitMaterialized')), new RegExp(MARKER_KEY))
 })
 
-test('continuable descriptor rejects unknown keys', () => {
-  const source = fs.readFileSync(descriptor, 'utf8')
+test('continuable descriptor rejects unknown keys', { skip: !descriptor || !fs.existsSync(descriptor) }, () => {
+  const source = readDshFile(descriptor)
   assert.match(source, /CONTINUABLE_DESCRIPTOR_KEYS/)
   assert.match(source, /assertKnownKeys\(value, mode === ['"]one-shot['"] \? ONE_SHOT_DESCRIPTOR_KEYS : CONTINUABLE_DESCRIPTOR_KEYS/)
 })
