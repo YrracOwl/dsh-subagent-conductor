@@ -46,6 +46,7 @@ After bundle or manifest changes, refresh workspace metadata from the parent wor
 - Manifest or bundle change: run the workspace metadata generator with `--write` and `--check` from the parent workspace.
 - Client change: test cleanup structurally, then verify real Slot-rendered UI and behavior on port 3080 after a user restart.
 - Version/release: bump `package.json`, commit, tag `vX.Y.Z`, push (GitHub Actions publishes with Trusted Publishing); verify the npm registry before reconciling the profile.
+- Install-surface change: `README.md` is the only user-facing install surface, so keep its recommended `dsh plugin --profile web add dsh-subagent-conductor` command and the required DSH Web restart current.
 
 ## Pitfalls
 
