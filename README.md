@@ -2,7 +2,7 @@
 
 ## English
 
-**Current release: 0.2.0** — A settings and default-route layer over the OFFICIAL DeepSeek Harness subagent tools. DSH 0.1.2+ fine-grained Remotes are used on the Client; no legacy connection fallback remains.
+**Current release: 0.2.1** — A settings and default-route layer over the OFFICIAL DeepSeek Harness subagent tools. DSH 0.1.2+ fine-grained Remotes are used on the Client; no legacy connection fallback remains. This release adds a documented install path: `dsh plugin --profile web add dsh-subagent-conductor`.
 
 Lifecycle-safe subagent routing settings for DeepSeek Harness Web: per-root-session provider/model/reasoning-effort selection in the composer, role templates with a visual editor, and a global default route. It does not patch DSH, does not replace or wrap the stock `subagent` / `subagent_fork` tools, and does not register its own delegation tool.
 
@@ -43,6 +43,22 @@ Roles are route presets with display metadata. They do not carry persona or tool
 ## Migration from 0.1.x
 
 v0.1's private `AgentOptions` marker, the `subagent_direct` delegation tool, and the runtime persona/toolFilter/transport/maxDepth/background controls are removed: the official tool rows own delegation, persona/toolFilter config, depth and background policy now. Existing `subagent-conductor` namespace values are normalized on read — dropped v1 keys are ignored and never resurrected. Behavior change is deliberate: routing precedence is now session > default role > global default > official choice (v0.1 put an explicit role marker above the session selection).
+
+## Install
+
+```powershell
+dsh plugin --profile web add dsh-subagent-conductor
+```
+
+Restart the existing DSH Web process afterwards: the Host scans the browser plugin roster at startup, so the composer selector and the Settings card appear only after that restart. Then open **Settings → Plugins → Subagent Conductor** to manage the global default route and the default role.
+
+Local development, from this package directory:
+
+```powershell
+dsh plugin --profile web add .
+```
+
+Either form records the package in the profile's `dsh.profile.bundles`, which is what mounts the Host request listener and serves the client bundle.
 
 ## Development
 

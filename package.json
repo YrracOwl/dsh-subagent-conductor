@@ -1,6 +1,6 @@
 {
   "name": "dsh-subagent-conductor",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "EN: Settings and default-route layer for official DeepSeek Harness subagents: session/role/global model routing with a composer selector. ZH: 面向 DeepSeek Harness Web 官方子代理的设置与默认路由层：会话/角色/全局模型路由与输入框选择器。",
   "type": "module",
   "main": "lib/index.js",
