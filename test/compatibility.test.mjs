@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { findRootSessionId, isSubagent } from '../lib/config.js'
+import plugin from '../lib/index.js'
+import { findRootSessionId, isSubagent, validateSettings } from '../lib/config.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 // These DSH white-box tests inspect the locally installed DSH implementation.
@@ -61,4 +62,97 @@ test('nested child resolves the non-subagent root and detects cycles', () => {
   assert.equal(findRootSessionId(grandchild, agents), 'root')
   root.session.header = { id: 'root', origin: 'subagent', parentSession: 'grand' }
   assert.equal(findRootSessionId(grandchild, agents), undefined)
+})
+
+// ── both settings hosts, exercised through the real listener ────────────────
+// A volatile field's parsed value is a cosmokit wrapper: get() plus the
+// registered write symbol, and deliberately NO `.set` — the reader must key on
+// the symbol, so a box that exposed `.set` would make these fakes unfaithful.
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+function box(initial) {
+  let value = initial
+  return { get: () => value, setValue: (next) => { value = next }, [VOLATILE_WRITE]() {} }
+}
+
+function makeHarness(settings, config) {
+  const handlers = new Map()
+  const effects = []
+  const fiber = { id: 'conductor-entry-fiber' }
+  const ctx = {
+    fiber,
+    logger: { warn() {} },
+    llm: { resolveModelInfo: async () => ({ reasoning: { efforts: [] } }) },
+    get() { return undefined },
+    inject(names, callback) {
+      if (names.includes('settings')) callback({ settings, effect: (execute) => { effects.push(execute()); return () => {} } })
+    },
+    on(event, handler) { handlers.set(event, handler) },
+  }
+  plugin.apply(ctx, config)
+  const request = (payload, base) => handlers.get('agent/request')(payload, async () => base)
+  return { request, effects, fiber }
+}
+
+const CHILD = { agent: { id: 'agent-1', options: { subagentDepth: 1 }, session: { header: { origin: 'session' } } } }
+
+test('declarative host suppresses the generated page and routes from the live Config', async () => {
+  const selections = box({ 'agent-1': { provider: 'session-p', model: 'session-m' } })
+  const config = {
+    defaultRoute: { provider: box('default-p'), model: box('default-m'), reasoningEffort: box(undefined) },
+    defaultRole: box(undefined),
+    roles: box({}),
+    sessionSelections: selections,
+  }
+  const calls = []
+  const { request, fiber } = makeHarness({ configure: (presentation, owner) => { calls.push([presentation, owner]); return () => {} } }, config)
+  // configure(presentation, owner) is keyed by the plugin entry's own fiber.
+  assert.deepEqual(calls, [[{ auto: false }, fiber]])
+  const base = { provider: 'official-p', model: 'official-m' }
+  assert.deepEqual(await request(CHILD, base), { provider: 'session-p', model: 'session-m' })
+  // The settings service edits volatile fields in place without remounting the
+  // entry, so the next request must observe the edited value: nothing is cached.
+  selections.setValue({ 'agent-1': { provider: 'edited-p', model: 'edited-m' } })
+  assert.deepEqual(await request(CHILD, base), { provider: 'edited-p', model: 'edited-m' })
+})
+
+test('declarative host degrades to empty settings when the Config is invalid', async () => {
+  const config = {
+    defaultRoute: { provider: box('default-p'), model: box('default-m'), reasoningEffort: box(undefined) },
+    defaultRole: box(undefined),
+    roles: box({ 'Not_Kebab': { displayName: 'Bad', description: 'Bad id' } }),
+    sessionSelections: box({}),
+  }
+  const { request } = makeHarness({ configure: () => () => {} }, config)
+  const base = { provider: 'official-p', model: 'official-m' }
+  // A rejected Config must never break routing: it degrades to the empty
+  // conductor layers and the official/inherited request passes untouched.
+  assert.deepEqual(await request(CHILD, base), base)
+})
+
+test('declarative host is inert when the settings service is absent or register-less', async () => {
+  const base = { provider: 'official-p', model: 'official-m' }
+  for (const settings of [undefined, {}, { read: () => ({}) }]) {
+    const { request, effects } = makeHarness(settings, undefined)
+    assert.deepEqual(await request(CHILD, base), base)
+    assert.equal(effects.length, 0)
+  }
+})
+
+test('legacy host still registers the namespace and routes from its scope', async () => {
+  const registrations = []
+  const settings = {
+    register: (ns, schema, options) => {
+      registrations.push({ ns, schema, options })
+      return { get: () => ({ defaultRoute: { provider: 'legacy-p', model: 'legacy-m' } }) }
+    },
+  }
+  const { request, effects } = makeHarness(settings, undefined)
+  assert.equal(registrations.length, 1)
+  assert.equal(registrations[0].ns, 'subagent-conductor')
+  assert.equal(registrations[0].options.validate, validateSettings)
+  assert.deepEqual(await request(CHILD, { provider: 'official-p', model: 'official-m' }), { provider: 'legacy-p', model: 'legacy-m' })
+  assert.equal(effects.length, 1)
+  // Disposal mirrors the declarative branch: routing falls back to empty.
+  effects[0]()
+  assert.deepEqual(await request(CHILD, { provider: 'official-p', model: 'official-m' }), { provider: 'official-p', model: 'official-m' })
 })

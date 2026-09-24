@@ -38,6 +38,88 @@ test('config exposes only v2 helpers', () => {
   assert.match(config, /export function normalizeReasoningEffort/)
 })
 
+test('host declares one capability-detected Config for both settings hosts', () => {
+  // ≤ 0.1.5 resolves schemastery 3.18.1/3.18.2, where `.volatile()` does not
+  // exist and calling it throws: the mark may only be applied through the
+  // capability-detected helper, never directly on a schema expression.
+  assert.match(host, /const volatile = \(schema\) => \(typeof schema\?\.volatile === 'function' \? schema\.volatile\(\) : schema\)/)
+  // Exactly one CODE-level `.volatile()` call: the capability-detected helper.
+  // Comments may name it; a schema expression may not call it directly.
+  const hostCode = host.split('\n').filter((line) => !line.trimStart().startsWith('//')).join('\n')
+  assert.equal((hostCode.match(/\.volatile\(\)/g) || []).length, 1)
+  // A volatile field's parsed value is a cosmokit wrapper carrying get() plus the
+  // registered write symbol — and no `.set` — so the reader keys on the symbol.
+  assert.match(host, /Symbol\.for\('cosmokit\.volatile\.write'\)/)
+  assert.match(host, /if \(!\(VOLATILE_WRITE in value\)\) return value/)
+  assert.doesNotMatch(host, /typeof value\.set === 'function'/)
+  assert.doesNotMatch(host, /from ['"]@deepseek-ai\/cosmokit['"]/)
+  // defaultRoute is a fixed path: its leaves are volatile. roles and
+  // sessionSelections are keyed at runtime: the dict NODE is volatile and the
+  // child schemas must stay plain (a volatile field inside a dict or inside
+  // another volatile field is rejected at resolve time).
+  assert.match(host, /defaultRoute: Schema\.object\(\{\n\s+provider: volatile\(Schema\.string\(\)\),\n\s+model: volatile\(Schema\.string\(\)\),\n\s+reasoningEffort: volatile\(Schema\.string\(\)\),\n\s+\}\)\.default\(\{\}\)/)
+  assert.match(host, /defaultRole: volatile\(Schema\.string\(\)\)/)
+  assert.match(host, /roles: volatile\(Schema\.dict\(RoleSchema\)\.default\(\{\}\)\)/)
+  assert.match(host, /sessionSelections: volatile\(Schema\.dict\(RouteSchema\)\.default\(\{\}\)\)/)
+  assert.doesNotMatch(host, /Schema\.string\(\)\.volatile/)
+  assert.doesNotMatch(host, /RoleSchema\.default\(\{\}\)\.volatile/)
+  assert.doesNotMatch(host, /volatile\(Schema\.dict\(volatile/)
+  // The loader unwraps the default export before applying the plugin, so the
+  // default object carries name/inject/apply AND the entry Config the ≥ 0.1.7
+  // settings service reads.
+  assert.match(host, /export default \{ name, inject, apply, Config: SettingsSchema \}/)
+})
+
+test('host keeps the optional settings transport non-gating', () => {
+  // cordis treats every inject name as a REQUIRED gate, so declaring the
+  // version-dependent transport in exports.inject leaves the fiber INACTIVE and
+  // fails the whole Web boot. `settings` may only be awaited through the
+  // non-gating ctx.inject(['settings'], cb) that already exists.
+  assert.match(host, /export const inject = \['llm'\]/)
+  assert.match(host, /ctx\.inject\(\['settings'\], \(sctx\) => \{/)
+  assert.doesNotMatch(host, /export const inject = \[[^\]]*settings/)
+  assert.doesNotMatch(host, /export const inject = \[[^\]]*(configForms|settingsScope)/)
+  // The Host half never touches the client-side form transport.
+  assert.doesNotMatch(host, /configForms/)
+})
+
+test('declarative-host branch suppresses the generated page and reads on demand', () => {
+  // configure(presentation, owner) is keyed by the plugin entry's OWN fiber, and
+  // the declarative branch is chosen by capability, not by host version.
+  assert.match(host, /typeof settings\.configure === 'function'/)
+  assert.match(host, /settings\.configure\(\{ auto: false \}, ctx\.fiber\)/)
+  assert.match(host, /const settings = sctx\.settings\n\s+if \(!settings\) return/)
+  // The parsed Config is read on EVERY request; nothing caches a settings value
+  // at apply time, because volatile fields are edited in place.
+  assert.match(host, /function readConfiguredSettings\(config\)/)
+  assert.match(host, /const effective = validateSettings\(readConfiguredSettings\(config\)\)/)
+  assert.match(host, /return normalizeSettings\(\{\}\)/)
+  // Disposal mirrors the legacy branch on both paths.
+  assert.equal((host.match(/\$\{name\}: settings fallback/g) || []).length, 1)
+})
+
+test('client looks up the settings form by the loader entry id', () => {
+  // configForms.get(entryId) is keyed by the loader entry id, which the patch row
+  // declares; the namespace must stay equal on both hosts.
+  assert.match(patch, /id: subagent-conductor/)
+  assert.match(client, /const NS = 'subagent-conductor'/)
+  assert.match(client, /const forms = ctx\.get\('configForms'\)/)
+  assert.match(client, /forms\.get\(namespace\)/)
+})
+
+test('settings card writes the fixed-path volatile fields leaf by leaf', () => {
+  // defaultRoute's Config leaves are volatile but the enclosing node is not, and
+  // the declarative host refuses an op whose path is not beneath a volatile node;
+  // a whole-object write at ['defaultRoute'] would never land.
+  assert.match(client, /path: \['defaultRoute', field\]/)
+  assert.match(client, /\{ op: 'unset', path: \['defaultRoute', field\] \}/)
+  assert.doesNotMatch(client, /path: \['defaultRoute'\]/)
+  // The runtime-rekeyed records keep addressing the node itself.
+  assert.match(client, /path: \['sessionSelections', rootId\]/)
+  assert.match(client, /path: \['roles'\], value: form\.roles/)
+  assert.match(client, /path: \['defaultRole'\]/)
+})
+
 test('client follows the one-argument ModuleLoader factory contract', () => {
   assert.match(client, /factory: \(require\) => \{\s*const module = \{ exports: \{\} \}/)
   assert.doesNotMatch(client, /factory: \(require, exports, module\)/)
