@@ -48,14 +48,25 @@ test('client registers official slots and removes its style', () => {
   assert.match(client, /conversation\.input\.right/)
   assert.match(client, /\(props\) => e\(Selector, \{ \.\.\.props, api, scope \}\)/)
   assert.doesNotMatch(client, /inject: \(sessionId\) => \(\{ sessionId, api, scope \}\)/)
-  assert.match(client, /settings\.plugin\.item/)
+  // 卡片必须在设置传输的子上下文上注册（sctx.slots），见 client.js 的 registerCard。
+  assert.match(client, /sctx\.slots\.inject\('settings\.plugin\.item'/)
   assert.match(client, /ctx\.effect\(\(\) => \(\) => style\.remove\(\)/)
   assert.doesNotMatch(client, /214748/)
   assert.doesNotMatch(client, /document\.body\.appendChild/)
 })
 
 test('client declares dotted remote services and no legacy connection', () => {
-  assert.match(client, /exports\.inject = \['slots', 'settingsScope', 'remote', 'remote\.session', 'remote\.settings'\]/)
+  // NEITHER settings transport may appear in exports.inject: cordis treats every
+  // inject name as a REQUIRED gate, so declaring the optional transport leaves the
+  // plugin permanently pending and fails Web boot. The optional wait lives in
+  // apply as ctx.inject([...], cb); the dotted remote names must stay declared.
+  assert.match(client, /exports\.inject = \['slots', 'remote', 'remote\.session', 'remote\.settings'\]/)
+  assert.match(client, /function resolveSettingsScopeFrom\(ctx, namespace\)/)
+  assert.match(client, /ctx\.inject\(\['settingsScope'\], registerCard\)/)
+  assert.match(client, /ctx\.inject\(\['configForms'\], \(sctx\) => \{ if \(scope === undefined\) registerCard\(sctx\) \}\)/)
+  assert.doesNotMatch(client, /exports\.inject = \[[^\]]*settingsScope/)
+  assert.doesNotMatch(client, /exports\.inject = \[[^\]]*configForms/)
+  assert.doesNotMatch(client, /ctx\.settingsScope\.bind/)
   assert.doesNotMatch(client, /'connection'/)
   assert.doesNotMatch(client, /ctx\.get\('connection'\)/)
   assert.match(client, /remote\.session\.modelCatalog\(\)/)
