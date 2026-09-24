@@ -2,7 +2,7 @@
 
 ## English
 
-**Current release: 0.2.1** — A settings and default-route layer over the OFFICIAL DeepSeek Harness subagent tools. DSH 0.1.2+ fine-grained Remotes are used on the Client; no legacy connection fallback remains. This release adds a documented install path: `dsh plugin --profile web add dsh-subagent-conductor`.
+**Current release: 0.2.2** — Portable settings transport: the plugin now resolves its settings scope on both the `settingsScope` (≤ 0.1.5) and `configForms` (≥ 0.1.7-rc.1) hosts, so the composer selector and Settings card keep working across the rename.
 
 Lifecycle-safe subagent routing settings for DeepSeek Harness Web: per-root-session provider/model/reasoning-effort selection in the composer, role templates with a visual editor, and a global default route. It does not patch DSH, does not replace or wrap the stock `subagent` / `subagent_fork` tools, and does not register its own delegation tool.
 
