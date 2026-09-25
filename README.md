@@ -32,7 +32,7 @@ The selector renders on the left of the main model seat (`conversation.input.rig
 
 ## Settings card
 
-The card registers on both settings seats, because DSH moved it: on ≤ 0.1.5 it is a card under **Settings → Plugins** (`settings.plugin.item`), and on 0.1.7-rc.2 — which removed that slot — it is the configuration page of the `subagent-conductor` bundle row in the Plugins panel (`plugins.row.config`, keyed `<package name>#<row id>`). Both seats manage:
+The card registers on both settings seats, because DSH moved it: on ≤ 0.1.5 it is a card under **Settings → Plugins** (`settings.plugin.item`), and on 0.1.7-rc.2 — which removed that slot — it is the configuration page of the `subagent-conductor` bundle row in the **插件** panel (the first sidebar panel icon) (`plugins.row.config`, keyed `<package name>#<row id>`). Both seats manage:
 
 - global default route (provider/model pair plus optional effort),
 - the default role (applied only when no root-session selection exists),
@@ -65,7 +65,7 @@ Only keys this version's `Config` declares are accepted; `subagentProvider`, `ba
 dsh plugin --profile web add dsh-subagent-conductor
 ```
 
-Restart the existing DSH Web process afterwards: the Host scans the browser plugin roster at startup, so the composer selector and the Settings card appear only after that restart. Then open the Subagent Conductor settings — on ≤ 0.1.5 **Settings → Plugins → Subagent Conductor**, on 0.1.7-rc.2 the `subagent-conductor` row's configuration page in the Plugins panel — to manage the global default route and the default role.
+Restart the existing DSH Web process afterwards: the Host scans the browser plugin roster at startup, so the composer selector and the Settings card appear only after that restart. Then open the Subagent Conductor settings — on ≤ 0.1.5 **Settings → Plugins → Subagent Conductor**, on 0.1.7-rc.2 the `subagent-conductor` row's configuration page in the **插件** panel (the first sidebar panel icon) — to manage the global default route and the default role.
 
 Local development, from this package directory:
 
