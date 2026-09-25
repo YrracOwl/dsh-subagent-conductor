@@ -3,7 +3,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import vm from 'node:vm'
 
-const host = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+// Normalized at the read boundary: two of the code-shape guards below spell `\n`
+// literally, so a CRLF checkout (windows-latest) would stop matching them while an
+// LF tree stays green.
+const host = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const config = fs.readFileSync(new URL('../lib/config.js', import.meta.url), 'utf8')
 const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
 const patch = fs.readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
