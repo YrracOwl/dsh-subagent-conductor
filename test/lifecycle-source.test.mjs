@@ -1,12 +1,49 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import vm from 'node:vm'
 
 const host = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
 const config = fs.readFileSync(new URL('../lib/config.js', import.meta.url), 'utf8')
 const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
 const patch = fs.readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+// Code-shape guards (as opposed to prose guards) must not be satisfiable — or
+// breakable — by a comment: the file documents the rc.2 contract at length.
+const clientCode = client.split('\n').filter((line) => !line.trimStart().startsWith('//')).join('\n')
+
+// The client half is an official __ModuleLoader__ bundle: it is not importable in
+// Node, so the two runtime guards below evaluate it in a sandbox and read the
+// plugin object the factory returns. Only the OBJECT shape is evaluated — apply()
+// is never called and document/window side effects never run, so the stub can stay
+// this small (factory scope only requires `react`).
+function loadClientPlugin() {
+  let captured
+  const React = {
+    createElement: (...args) => ({ args }),
+    useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+    useReducer: (state) => [state, () => {}],
+    useEffect: () => {},
+    useRef: (current) => ({ current }),
+    useCallback: (fn) => fn,
+    useMemo: (fn) => fn(),
+    Fragment: 'Fragment',
+  }
+  const sandbox = {
+    window: { __ModuleLoader__: { load(spec) { captured = spec } } },
+    // Deliberately minimal: `apply` (the only consumer of these globals) is not run.
+    document: { createElement: () => ({ style: {}, dataset: {} }), head: { appendChild() {} }, querySelectorAll: () => [] },
+    console,
+  }
+  sandbox.globalThis = sandbox
+  vm.runInNewContext(client, sandbox, { filename: 'lib/client.js' })
+  assert.ok(captured, 'lib/client.js must call window.__ModuleLoader__.load')
+  return captured.factory((id) => {
+    if (id === 'react') return React
+    throw new Error(`unexpected require(${id}) at factory scope`)
+  })
+}
 
 test('bundle patch inserts only the conductor row', () => {
   const effective = patch.split('\n').filter((line) => !line.trimStart().startsWith('#')).join('\n')
@@ -153,6 +190,66 @@ test('client declares dotted remote services and no legacy connection', () => {
   assert.doesNotMatch(client, /ctx\.get\('connection'\)/)
   assert.match(client, /remote\.session\.modelCatalog\(\)/)
   assert.match(client, /remote\.settings\.mutate\(payload\.ns, payload\.ops, payload\.expectedRevision\)/)
+})
+
+// ── the 0.1.7-rc.2 seat: the keyed slot plugins.row.config ───────────────────
+//
+// rc.2 removed `settings.plugin.item`; a bundle ROW's configuration seat is the
+// keyed slot `plugins.row.config`, declared by the official plugin-manager page,
+// and that page shows a row's configure control only while an occupant holds the
+// exact `<package name>#<row id>` ledger key. Both seats therefore stay declared
+// side by side — each fires only where its own slot exists.
+
+test('rc.2: the card also registers on the keyed plugins.row.config seat', () => {
+  // ONE options object (`{ name, key }`), never a slot name plus options: the real
+  // slots service reads `options.name` and rejects a bare string as undeclared.
+  assert.match(clientCode, /sctx\.slots\.register\(\{\s*name: 'plugins\.row\.config',\s*key: ROW_CONFIG_KEY,?\s*\},/)
+  assert.doesNotMatch(clientCode, /slots\.register\(\s*'plugins\.row\.config'/)
+  // Reached through the non-gating ctx.inject(['slots'], …) wait, and the
+  // registration disposer is returned so the entry is owned by that fiber.
+  assert.match(clientCode, /const registerRowConfig = \(sctx\) => sctx\.slots\.inject\('plugins\.row\.config', \(\) => sctx\.slots\.register\(/)
+  assert.match(clientCode, /ctx\.inject\(\['slots'\], registerRowConfig\)/)
+  // `view === 'summary'` renders the one-liner alone; `page` renders the card.
+  assert.match(clientCode, /props\.view === 'summary'/)
+  assert.match(clientCode, /return e\('span', \{ className: 'dscRowSummary' \}/)
+  assert.match(clientCode, /return e\(SettingsCard, \{ scope, api \}\)/)
+  // The host-owned `form` prop is optional: this plugin must not grow a second
+  // read or write path on top of the resolved settings scope.
+  assert.doesNotMatch(clientCode, /props\.form/)
+  // The ≤ 0.1.5 seat stays exactly where it was.
+  assert.match(clientCode, /sctx\.slots\.inject\('settings\.plugin\.item'/)
+  // `scope` must be read from the apply closure at render time, never captured by
+  // value at registration time (the transport may resolve after this registration).
+  assert.doesNotMatch(clientCode, /e\(SettingsCard, \{ scope: props\./)
+})
+
+test('rc.2: ROW_CONFIG_KEY is exactly `<package name>#<row id in cordis.patch.yml>`', () => {
+  const effective = patch.split('\n').filter((line) => !line.trimStart().startsWith('#')).join('\n')
+  const rowId = effective.match(/^\s*-\s*id:\s*([^\s#]+)\s*$/m)?.[1]
+  assert.ok(rowId, 'cordis.patch.yml must declare one row id')
+  const expected = `${pkg.name}#${rowId}`
+  // One literal in the source …
+  const literal = client.match(/const ROW_CONFIG_KEY = '([^']+)'/)
+  assert.ok(literal, 'ROW_CONFIG_KEY must be declared as one single-quoted literal')
+  assert.equal(literal[1], expected)
+  // … and the same value the bundle actually exports.
+  assert.equal(loadClientPlugin().ROW_CONFIG_KEY, expected)
+})
+
+test('client hard-gates on no version-dependent settings service', () => {
+  const plugin = loadClientPlugin()
+  assert.ok(Array.isArray(plugin.inject), 'exports.inject must be an array')
+  // cordis resolves EVERY inject name as its own required gate, so an optional,
+  // version-dependent transport here leaves the fiber INACTIVE and fails Web boot
+  // with "N entries did not activate / waiting for service: <name>". Exact-entry
+  // comparison keeps `remote.settings` (a dotted remote face) out of the ban.
+  for (const name of ['settings', 'settingsScope', 'configForms']) {
+    assert.ok(!plugin.inject.includes(name), `${name} must never be a hard inject gate`)
+  }
+  // Pin the complete list: any added gate fails here, and the dotted remote
+  // declarations cannot be dropped silently. `slots` is provided by every Web
+  // client and orders the registrations after the slot registry exists.
+  assert.deepEqual([...plugin.inject], ['slots', 'remote', 'remote.session', 'remote.settings'])
 })
 
 test('selector matches main model typography and exposes effort selection', () => {

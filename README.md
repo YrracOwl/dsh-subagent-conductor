@@ -32,7 +32,7 @@ The selector renders on the left of the main model seat (`conversation.input.rig
 
 ## Settings card
 
-Settings → Plugins → Subagent Conductor manages:
+The card registers on both settings seats, because DSH moved it: on ≤ 0.1.5 it is a card under **Settings → Plugins** (`settings.plugin.item`), and on 0.1.7-rc.2 — which removed that slot — it is the configuration page of the `subagent-conductor` bundle row in the Plugins panel (`plugins.row.config`, keyed `<package name>#<row id>`). Both seats manage:
 
 - global default route (provider/model pair plus optional effort),
 - the default role (applied only when no root-session selection exists),
@@ -44,13 +44,28 @@ Roles are route presets with display metadata. They do not carry persona or tool
 
 v0.1's private `AgentOptions` marker, the `subagent_direct` delegation tool, and the runtime persona/toolFilter/transport/maxDepth/background controls are removed: the official tool rows own delegation, persona/toolFilter config, depth and background policy now. Existing `subagent-conductor` namespace values are normalized on read — dropped v1 keys are ignored and never resurrected. Behavior change is deliberate: routing precedence is now session > default role > global default > official choice (v0.1 put an explicit role marker above the session selection).
 
+**On DSH ≥ 0.1.7 a v0.1 section needs one manual step.** That release removed the settings document: on the first launch the host renames `settings.yaml` to `settings.yaml.imported` and imports each section into its entry's `Config`, one section at a time. Because a v0.1 section still carries keys v0.2 dropped (`subagentProvider`, `backgroundMode`, `maxDepth`, `enableRunInBackground`), and the import refuses any path the entry's `Config` does not declare, the **whole section** is rejected — including `defaultRoute` and every `sessionSelections` entry, so the plugin starts from defaults (the composer selector reads `inherit`). The host only logs a warning; this plugin additionally reports it once per launch, naming the file and the offending keys. To carry the values over, put the part you want to keep on the `subagent-conductor` row of the profile patch:
+
+```yaml
+- id: subagent-conductor
+  config:
+    defaultRoute:
+      provider: <provider>
+      model: <model>
+      reasoningEffort: <effort>
+    sessionSelections:
+      <session-id>: { provider: <provider>, model: <model> }
+```
+
+Only keys this version's `Config` declares are accepted; `subagentProvider`, `backgroundMode`, `maxDepth` and `enableRunInBackground` cannot be represented any more and are ignored by design.
+
 ## Install
 
 ```powershell
 dsh plugin --profile web add dsh-subagent-conductor
 ```
 
-Restart the existing DSH Web process afterwards: the Host scans the browser plugin roster at startup, so the composer selector and the Settings card appear only after that restart. Then open **Settings → Plugins → Subagent Conductor** to manage the global default route and the default role.
+Restart the existing DSH Web process afterwards: the Host scans the browser plugin roster at startup, so the composer selector and the Settings card appear only after that restart. Then open the Subagent Conductor settings — on ≤ 0.1.5 **Settings → Plugins → Subagent Conductor**, on 0.1.7-rc.2 the `subagent-conductor` row's configuration page in the Plugins panel — to manage the global default route and the default role.
 
 Local development, from this package directory:
 

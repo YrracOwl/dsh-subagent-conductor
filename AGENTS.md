@@ -12,8 +12,8 @@
 - `docs/design.md`: v0.2 contract — precedence, official-choice detection, effort atomicity.
 - `lib/config.js`: pure normalization, layer resolution (`session > defaultRole > default`), request-route intent, lineage and subagent helpers.
 - `lib/index.js`: Host Settings registration and the single `agent/request` listener (validation, non-strict degradation).
-- `lib/client.js`: official Client bundle — composer selector (`conversation.input.right`), role/settings card (`settings.plugin.item`), lifecycle-owned styles/listeners.
-- `test/config.test.mjs`, `test/compatibility.test.mjs`, `test/lifecycle-source.test.mjs`: v2 guards.
+- `lib/client.js`: official Client bundle — composer selector (`conversation.input.right`) and the role/settings card, registered on BOTH seats: legacy `settings.plugin.item` (declared by ≤ 0.1.5) and the rc.2 keyed row seat `plugins.row.config` keyed `ROW_CONFIG_KEY`; lifecycle-owned styles/listeners.
+- `test/config.test.mjs`, `test/compatibility.test.mjs`, `test/lifecycle-source.test.mjs`: v2 guards (lifecycle-source also carries the rc.2 row-seat and `ROW_CONFIG_KEY` derivation guards).
 - `README.md`: user-facing EN/ZH semantics incl. migration notes from 0.1.x.
 
 ## Invariants
@@ -26,6 +26,7 @@
 - Role entries are route presets + display metadata only (id/displayName/description/provider/model/reasoningEffort). v0.1 persona/toolFilter/transport/maxDepth/background fields are dropped and must not be reintroduced as runtime claims; the official tool rows own those start-time fields.
 - Every listener, Settings registration, Slot, style node, and DOM listener needs a lifecycle-owned disposer. Runtime code must not import DSH/Cordis peer packages from the linked package path; obtain capabilities from injected `ctx` services.
 - Settings reach the Host two ways. ≤ 0.1.5 registers the `subagent-conductor` namespace with `ctx.settings.register(...)`. ≥ 0.1.7 has no `register`: the namespace IS the entry's exported `Config`, keyed by the loader entry id `subagent-conductor`, where `defaultRoute`'s leaves and `defaultRole` are volatile and the two RECORDS (`roles`, `sessionSelections`) are volatile **as nodes** — the only legal way to keep `sessionSelections.<rootSessionId>` writable, since a volatile field may never sit inside a dict. `.volatile()` is applied by capability (the 0.1.5 schemastery has no such method; an unconditional call throws at module load), and `getSettings` must unwrap the resolved values (Symbol `Symbol.for('cosmokit.volatile.write')`, then `.get()`) on every read, because the service updates them in place without remounting. `ctx.settings.configure({ auto: false }, ctx.fiber)` declares that this plugin renders its own card rather than a generated page.
+- The Client card has TWO settings seats, because 0.1.7-rc.2 **removed** `settings.plugin.item`. Keep the legacy `settings.plugin.item` registration (key `subagent-conductor`, declared only by ≤ 0.1.5) beside the rc.2 occupant of the keyed slot `plugins.row.config`, registered as ONE options object (`{ name, key: ROW_CONFIG_KEY }` — the slots service reads `options.name`) from inside the non-gating `ctx.inject(['slots'], …)` callback that returns the registration disposer. `ROW_CONFIG_KEY` must stay `` `dsh-subagent-conductor#subagent-conductor` `` = `` `${package.json#name}#<row id in cordis.patch.yml>` ``: the official plugin-manager renders a row's configure control only while its registration ledger holds that exact key, so a card left on one seat renders nowhere, silently. The rc.2 occupant renders a one-liner alone for `view === 'summary'` and the existing card for `'page'`, and must never read the host-owned optional `form` prop — both seats keep the single resolved transport (`settingsScope` ≤ 0.1.5 / `configForms` ≥ 0.1.7).
 
 ## Validation
 
@@ -39,7 +40,7 @@ npm pack --dry-run
 
 Optional DSH white-box guards (compatibility.test.mjs) need `DSH_CHECKOUT` pointing at the DSH install root (e.g. `C:\Users\CarryWho\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh`); they skip when absent.
 
-After bundle or manifest changes, refresh workspace metadata from the parent workspace and reconcile this package into the real Web profile (`dsh plugin --profile web add .`). Verify the existing `http://127.0.0.1:3080`; do not start a replacement server. Client changes need the user to restart the existing `dsh web`, then inspect the real Slot-rendered UI (composer seat left of the main model, Settings → Plugins card) and computed behavior.
+After bundle or manifest changes, refresh workspace metadata from the parent workspace and reconcile this package into the real Web profile (`dsh plugin --profile web add .`). Verify the existing `http://127.0.0.1:3080`; do not start a replacement server. Client changes need the user to restart the existing `dsh web`, then inspect the real Slot-rendered UI and computed behavior: the composer seat left of the main model, and the card on the seat that host declares — ≤ 0.1.5 under Settings → Plugins, ≥ 0.1.7-rc.2 on the `subagent-conductor` bundle row's configuration page in the Plugins panel. After any settings-surface change also run `node scripts/settings-portability-check.mjs` from the workspace root: it executes the real client bundle against the four host shapes and fails when the card misses its `<package>#<row id>` ledger key or stays on a removed seat.
 
 ## Change Checklist
 
@@ -56,3 +57,4 @@ After bundle or manifest changes, refresh workspace metadata from the parent wor
 - `remote.session.modelCatalog()` resolves `{ ok, value }`; do not wrap it twice or expect `result.ok` from the raw call.
 - v0.1 namespace values persist after upgrade: normalization must ignore dropped keys silently (validate throws only on v2 shape violations).
 - `conversation.input.right` is a session-scoped list slot: the component receives session standard props (`sessionId`, `useSessions`, …) directly; do not re-add the removed `inject(sessionId)` registration shape.
+- A settings card fails silently: an undeclared seat renders nothing and logs nothing, and the rc.2 configure control keys off the exact `<package name>#<row id>` string. Renaming the package or the patch row without updating `ROW_CONFIG_KEY` (guarded in `test/lifecycle-source.test.mjs`) therefore removes the card with no error — confirm the seat before debugging the card's own code.
