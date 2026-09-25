@@ -38,6 +38,8 @@ The card registers on both settings seats, because DSH moved it: on ≤ 0.1.5 it
 - the default role (applied only when no root-session selection exists),
 - visual role CRUD (id, display name, description, provider/model pair, effort), with JSON import/export as an advanced bulk-edit and backup path.
 
+`@deepseek-ai/schemastery` is a private `dependencies` entry whose floor must be ≥ 3.18.4 (`^3.18.4`): the profile hoists an older line (3.18.2) that satisfies a lower floor, and an entry whose Config exposes no volatile field is dropped from `SettingsForms.describe()` — the card then renders nothing with no error.
+
 Roles are route presets with display metadata. They do not carry persona or tool filters: those are start-time fields owned by the official tool rows, and conductor does not claim a runtime channel for them in v0.2.
 
 ## Migration from 0.1.x

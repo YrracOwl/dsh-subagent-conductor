@@ -325,3 +325,73 @@ test('client document listeners have paired cleanup', () => {
   assert.match(client, /addEventListener\('keydown', key\)/)
   assert.match(client, /removeEventListener\('keydown', key\)/)
 })
+
+// ── manifest: the schemastery FLOOR decides whether a settings page exists ───
+//
+// The profile root hoists the older 3.18.2 line, and `^3.18.1` is *satisfied* by
+// that hoisted copy, so pnpm never materializes a private volatile-capable copy.
+// `SettingsForms.describe()` drops any entry whose schema exposes no volatile
+// field, so the settings page disappears with no error at all. This is a FLOOR
+// rule, not a caret rule: the assertion below parses the declared range and
+// compares its minimum version, so `>=3.18.4`, `^3.18.4` and any future higher
+// floor pass while `^3.18.1` / `^3.18.2` / `^3.18.3` fail.
+const VOLATILE_FLOOR = [3, 18, 4]
+
+// Minimum stable version of a supported range, or null when the range is
+// permissive / unparseable (a `*`-like range admits 3.18.2, so it is not a floor).
+function minimumSatisfiableVersion(range) {
+  if (typeof range !== 'string') return null
+  const trimmed = range.trim()
+  if (trimmed === '' || trimmed === '*' || trimmed === 'x' || trimmed === 'latest') return null
+  if (trimmed.includes('||')) return null // an OR admits every branch's minimum
+  let floor = null
+  for (const token of trimmed.split(/\s+/).filter(Boolean)) {
+    const m = /^(\^|~|>=|<=|>|<|=|v)?\s*(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(token)
+    if (!m) return null
+    const version = [Number(m[2]), Number(m[3]), Number(m[4])]
+    const stable = m[5] === undefined
+    const op = m[1] || '='
+    // A caret/tilde/exact floor is the version itself; `>` sits just above it.
+    const candidate = op === '>' ? [version[0], version[1], version[2] + 1] : version
+    if (!stable) return null // a prerelease floor does not promise a stable `.volatile()`
+    if (floor === null || compareVersions(candidate, floor) > 0) floor = candidate
+  }
+  return floor
+}
+
+function compareVersions(a, b) {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1
+  return 0
+}
+
+test('declared @deepseek-ai/schemastery floor can never resolve a line without .volatile()', () => {
+  // It must stay a private `dependencies` entry: a peer would be downgraded to
+  // the profile's hoisted 3.18.2 copy, which is exactly the silent failure.
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(pkg.dependencies ?? {}, '@deepseek-ai/schemastery'),
+    true,
+    '@deepseek-ai/schemastery must stay a private dependencies entry',
+  )
+  const range = pkg.dependencies['@deepseek-ai/schemastery']
+  const floor = minimumSatisfiableVersion(range)
+  assert.ok(floor !== null, `unparseable / permissive schemastery range: ${range}`)
+  assert.ok(
+    compareVersions(floor, VOLATILE_FLOOR) >= 0,
+    `the declared floor must exclude schemastery lines without .volatile() (got ${range}, floor ${floor.join('.')})`,
+  )
+})
+
+test('the floor guard itself rejects the volatile-less lines and accepts higher floors', () => {
+  for (const range of ['^3.18.4', '>=3.18.4', '^3.18.5', '>3.18.3', '3.18.4', '^4.0.0']) {
+    const floor = minimumSatisfiableVersion(range)
+    assert.ok(floor, `${range} must parse to a floor`)
+    assert.ok(compareVersions(floor, VOLATILE_FLOOR) >= 0, `${range} must pass the floor guard`)
+  }
+  for (const range of ['^3.18.1', '^3.18.2', '^3.18.3', '>=3.18.0', '~3.18.2', '3.18.2', '*', '^3.18.4-rc.1']) {
+    const floor = minimumSatisfiableVersion(range)
+    assert.ok(
+      floor === null || compareVersions(floor, VOLATILE_FLOOR) < 0,
+      `${range} must fail the floor guard`,
+    )
+  }
+})
