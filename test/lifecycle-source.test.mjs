@@ -458,6 +458,16 @@ test('the card body starts expanded on both single-card pages and the header sti
     assert.equal(card.props.className, 'dscCard dscCardOpen', `${seat} must start expanded`)
     assert.equal(card.children[0].props['aria-expanded'], true)
     assert.equal(card.children[1].props.className, 'dscCardBody')
+    // The two elements whose type scale the typography guard below pins are really
+    // in this rendered tree — the card ROOT carries the sibling body scale, and the
+    // header keeps the sibling header scale (15px/600 name, 13px description).
+    const headText = card.children[0].children[0]
+    assert.equal(headText.props.className, 'dscCardHeadText')
+    assert.deepEqual(
+      headText.children.map((child) => child.props.className),
+      ['dscCardName', 'dscCardDescription'],
+      `${seat} must render the typography-pinned title/description pair`,
+    )
 
     // the manual toggle still folds it back up
     card.children[0].props.onClick()
@@ -567,6 +577,44 @@ test('settings rows stack full-width behind dividers and effort greys out withou
   assert.match(client, /effortAvailable && form\.effort\.trim\(\)/)
   assert.match(client, /当前模型未公开思考强度元数据，无法选择。/)
   assert.match(client, /\.dscField select:disabled\{opacity:\.55;cursor:not-allowed/)
+})
+
+// ── the card's own typography is pinned to the settings-column scale ─────────
+//
+// The card renders inside the settings panel, which the shell portals to <body>;
+// no shipped stylesheet sets html/body font-size, so any descendant left UNPINNED
+// there inherits the UA default 16px and reads larger than the card's own 15px
+// title. The sibling YOTK cards in that same column pin every text node instead:
+// dsh-mcp-pill `.dmpLabel` 13px/500 + `.dmpHint` 12px, dsh-tool-adapt `.dtaLabel`
+// 13px/500 + `.dtaHint` 12px. This guard pins the same values on the card ROOT, so
+// every unpinned descendant lands on that scale at once, declared through the
+// official `--dsw-font-*` semantic tokens (theme-presenter publishes them on
+// <body>) with the siblings' own px as the fallback for an older host.
+//
+// The sibling files are deliberately NOT read here: each package is its own repo
+// and its own CI run, so the convention is pinned literally, exactly as a sibling
+// release states it. The composer Selector shares `.dscHint`/`.dscError` and must
+// stay out of the card scope, which is why the `.dscCard` prefix is part of the pin.
+test('card typography matches the sibling settings cards in the settings column', () => {
+  const declared = /const CSS = \[([\s\S]*?)\]\.join\(''\)/.exec(client)
+  assert.ok(declared, 'the client must declare exactly one CSS array')
+  const sheet = declared[1]
+
+  // card ROOT: the sibling 13px body scale, official token first
+  assert.match(sheet, /\.dscCard\{[^']*font-size:var\(--dsw-font-xs-13-font-size,13px\)/)
+  assert.match(sheet, /\.dscCard\{[^']*line-height:var\(--dsw-font-xs-13-line-height,1\.5\)/)
+  // field labels and emphasised card copy: the sibling label weight 500
+  assert.match(sheet, /\.dscCard \.dscFieldLabel,\.dscCard strong\{font-weight:var\(--dsw-font-xs-strong-13-font-weight,500\)\}/)
+  // hints and error copy: the sibling 12px secondary scale
+  assert.match(sheet, /\.dscCard \.dscHint,\.dscCard \.dscError\{font-size:var\(--dsw-font-xxs-12-font-size,12px\)/)
+  assert.match(sheet, /\.dscCard \.dscHint,\.dscCard \.dscError\{[^']*line-height:var\(--dsw-font-xxs-12-line-height,1\.5\)/)
+  // the header keeps the sibling header scale verbatim: 15px/600 name, 13px description
+  assert.match(sheet, /\.dscCardName\{[^']*font-size:15px;font-weight:600;line-height:1\.4\}/)
+  assert.match(sheet, /\.dscCardDescription\{[^']*font-size:13px;line-height:1\.5\}/)
+  // no bare, unscoped `.dscHint` rule may appear — the Selector's copy is pinned by
+  // its own `.dscMenu .dscHint` scope and must not inherit the card's override
+  assert.doesNotMatch(sheet, /'\s*\.dscHint\{/)
+  assert.match(sheet, /\.dscMenu \.dscError,\.dscMenu \.dscHint\{/)
 })
 
 test('client document listeners have paired cleanup', () => {
