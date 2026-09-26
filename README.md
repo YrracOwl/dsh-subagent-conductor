@@ -32,7 +32,7 @@ The selector renders on the left of the main model seat (`conversation.input.rig
 
 ## Settings card
 
-The card registers on both settings seats, because DSH moved it: on ≤ 0.1.5 it is a card under **Settings → Plugins** (`settings.plugin.item`), and on 0.1.7-rc.2 — which removed that slot — it is the configuration page of the `subagent-conductor` bundle row in the **插件** panel (the first sidebar panel icon) (`plugins.row.config`, keyed `<package name>#<row id>`). Both seats manage:
+The card registers on both settings seats, because DSH moved it: on ≤ 0.1.5 it is a card under **Settings → Plugins** (`settings.plugin.item`), and on 0.1.7-rc.2 — which removed that slot — it is the configuration page of the `subagent-conductor` bundle row in the **插件** panel (the first sidebar panel icon) (`plugins.row.config`, keyed `<package name>#<row id>`). On 0.1.7-rc.2 the same card is also a first-class page one click deep in 设置 (`settings.section`, id `yotk-subagent-conductor`, order 62), so it stays reachable from the settings list as well as from its bundle row, and on that page and on the row's configuration page it starts expanded instead of collapsed (the Plugins-list card on ≤ 0.1.5 keeps its collapsed default). Both seats manage:
 
 - global default route (provider/model pair plus optional effort),
 - the default role (applied only when no root-session selection exists),

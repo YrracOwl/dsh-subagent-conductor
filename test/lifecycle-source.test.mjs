@@ -17,14 +17,16 @@ const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.ur
 const clientCode = client.split('\n').filter((line) => !line.trimStart().startsWith('//')).join('\n')
 
 // The client half is an official __ModuleLoader__ bundle: it is not importable in
-// Node, so the two runtime guards below evaluate it in a sandbox and read the
-// plugin object the factory returns. Only the OBJECT shape is evaluated — apply()
-// is never called and document/window side effects never run, so the stub can stay
-// this small (factory scope only requires `react`).
-function loadClientPlugin() {
+// Node, so the runtime guards below evaluate it in a sandbox and read the plugin
+// object the factory returns. `reactHooks` hands the bundle a hook host that keeps
+// state across render passes (see createHookHost); without it the stub records only
+// the OBJECT shape, which is all the registration guards need. The DOM stub stays
+// this small because `apply` only touches document.createElement / head.appendChild
+// (its style node) — the card's own effects are never executed here.
+function loadClientPlugin(reactHooks = {}) {
   let captured
   const React = {
-    createElement: (...args) => ({ args }),
+    createElement: (type, props, ...children) => ({ type, props: props || {}, children }),
     useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
     useReducer: (state) => [state, () => {}],
     useEffect: () => {},
@@ -32,11 +34,15 @@ function loadClientPlugin() {
     useCallback: (fn) => fn,
     useMemo: (fn) => fn(),
     Fragment: 'Fragment',
+    ...reactHooks,
   }
   const sandbox = {
     window: { __ModuleLoader__: { load(spec) { captured = spec } } },
-    // Deliberately minimal: `apply` (the only consumer of these globals) is not run.
-    document: { createElement: () => ({ style: {}, dataset: {} }), head: { appendChild() {} }, querySelectorAll: () => [] },
+    document: {
+      createElement: () => ({ style: {}, dataset: {}, textContent: '', remove() {} }),
+      head: { appendChild() {} },
+      querySelectorAll: () => [],
+    },
     console,
   }
   sandbox.globalThis = sandbox
@@ -46,6 +52,60 @@ function loadClientPlugin() {
     if (id === 'react') return React
     throw new Error(`unexpected require(${id}) at factory scope`)
   })
+}
+
+// One host shape: which optional services and which Slots are declared. `inject`
+// fires only when every requested name is provided, exactly like cordis. cordis
+// also COLLECTS the callback's returned function as an effect of the child fiber it
+// creates for `ctx.inject` (Fiber._execute), which is this plugin's disposal path
+// for both card seats — so `dispose()` here releases exactly what the real fiber
+// would, and `disposals` records each released registration by name.
+function makeCtx({ services = [], slots = [] } = {}) {
+  const registered = []
+  const disposals = []
+  const fiberDisposers = []
+  const scope = {
+    getSnapshot: () => ({ status: 'ready', writable: true, value: {}, base: {}, user: {}, revision: 1 }),
+    subscribe: () => () => {},
+    set: async () => true,
+    unset: async () => true,
+    mutate: async () => true,
+  }
+  const ctx = {
+    get(name) {
+      if (name === 'settingsScope' && services.includes('settingsScope')) return { bind: () => scope }
+      if (name === 'configForms' && services.includes('configForms')) return { get: () => scope }
+      return undefined
+    },
+    inject(names, cb) {
+      const list = Array.isArray(names) ? names : [names]
+      if (!list.every((name) => name === 'slots' || services.includes(name))) return
+      const dispose = cb(ctx)
+      if (typeof dispose === 'function') fiberDisposers.push(dispose)
+    },
+    effect(fn) {
+      const dispose = fn()
+      if (typeof dispose === 'function') fiberDisposers.push(dispose)
+      return typeof dispose === 'function' ? dispose : () => {}
+    },
+    slots: {
+      inject(slot, cb) {
+        if (!slots.includes(slot)) return () => {}
+        const dispose = cb()
+        return typeof dispose === 'function' ? dispose : () => {}
+      },
+      register(options, component) {
+        registered.push({ options, component })
+        return () => { disposals.push(options.name) }
+      },
+    },
+  }
+  const dispose = () => {
+    for (const release of fiberDisposers.splice(0)) {
+      try { release() } catch (_) { /* a released effect must not mask the guard */ }
+    }
+  }
+  return { ctx, registered, disposals, dispose }
 }
 
 test('bundle patch inserts only the conductor row', () => {
@@ -215,7 +275,12 @@ test('rc.2: the card also registers on the keyed plugins.row.config seat', () =>
   // `view === 'summary'` renders the one-liner alone; `page` renders the card.
   assert.match(clientCode, /props\.view === 'summary'/)
   assert.match(clientCode, /return e\('span', \{ className: 'dscRowSummary' \}/)
-  assert.match(clientCode, /return e\(SettingsCard, \{ scope, api \}\)/)
+  // `page` renders the card — and that view IS one card alone on a page of its
+  // own, so it also asks for the expanded disclosure. The collapsed default
+  // belongs to the legacy Plugins-list seat. Bounded to THIS occupant so the
+  // additive settings.section page (same literal, guarded separately below)
+  // cannot satisfy the assertion by itself.
+  assert.match(clientCode, /props\.view === 'summary'[\s\S]{0,600}?return e\(SettingsCard, \{ scope, api, defaultOpen: true \}\)/)
   // The host-owned `form` prop is optional: this plugin must not grow a second
   // read or write path on top of the resolved settings scope.
   assert.doesNotMatch(clientCode, /props\.form/)
@@ -237,6 +302,187 @@ test('rc.2: ROW_CONFIG_KEY is exactly `<package name>#<row id in cordis.patch.ym
   assert.equal(literal[1], expected)
   // … and the same value the bundle actually exports.
   assert.equal(loadClientPlugin().ROW_CONFIG_KEY, expected)
+})
+
+// ── additive seat: the settings.section page (one click deep in 设置) ────────
+//
+// 0.1.7-rc.2 also declares the root-scope LIST slot `settings.section` ("one
+// settings page per list entry") beside the two card seats. This registration is
+// ADDITIVE and must never gate the plugin: the seat is host-version dependent and
+// is awaited through the same NON-GATING `ctx.inject(['slots'], …)` shape the row
+// seat uses, whose callback returns the registration disposer. The page renders
+// the SAME SettingsCard the row seat renders for `view === 'page'` — one settings
+// UI, one transport, one persistence path.
+
+test('additive settings.section seat carries the exact nav identity', () => {
+  assert.match(clientCode, /const registerSettingsSection = \(sctx\) => sctx\.slots\.inject\('settings\.section', \(\) => sctx\.slots\.register\(\{/)
+  assert.match(clientCode, /name: 'settings\.section'/)
+  assert.match(clientCode, /id: 'yotk-subagent-conductor'/)
+  assert.match(clientCode, /order: 62/)
+  // label is a THUNK: the shell re-reads it on every projection instead of
+  // caching registrant-localized text
+  assert.match(clientCode, /label: \(\) => 'YOTK · Conductor'/)
+  // registered from inside the non-gating slots wait, and the disposer the
+  // callback returns is collected by the child fiber cordis creates for
+  // `ctx.inject([...], cb)` — the same disposal path as the row seat above.
+  assert.match(clientCode, /ctx\.inject\(\['slots'\], registerSettingsSection\)/)
+  assert.match(clientCode, /const registerRowConfig = \(sctx\) => sctx\.slots\.inject\('plugins\.row\.config'/)
+  // the additive seat sits BESIDE both card seats, never instead of them
+  assert.match(clientCode, /sctx\.slots\.inject\('settings\.plugin\.item'/)
+  // the seat declares exactly { id, order, label } — no invented contract keys
+  assert.doesNotMatch(clientCode, /name: 'settings\.section',\s*\n\s*locale:/)
+})
+
+test('settings.section fires without any settings transport and never gates', () => {
+  const plugin = loadClientPlugin()
+  // A host with the two card seats but NO settings transport at all: the seat
+  // registration must still fire (non-gating), exactly like the row seat.
+  const { ctx, registered, disposals, dispose } = makeCtx({
+    services: [],
+    slots: ['settings.section', 'plugins.row.config'],
+  })
+  plugin.apply(ctx)
+  const section = registered.find((item) => item.options.name === 'settings.section')
+  assert.ok(section, 'the settings.section occupant must register where the seat is declared')
+  assert.deepEqual(Object.keys(section.options).sort(), ['id', 'label', 'name', 'order'])
+  assert.equal(section.options.id, 'yotk-subagent-conductor')
+  assert.equal(section.options.order, 62)
+  assert.equal(typeof section.options.label, 'function')
+  assert.equal(section.options.label(), 'YOTK · Conductor')
+  // the registration is owned by the plugin: the disposer the callback returned
+  // is what the plugin's own fiber releases
+  assert.deepEqual(disposals, [], 'nothing is released before the plugin is disposed')
+  dispose()
+  assert.deepEqual(disposals.slice().sort(), ['plugins.row.config', 'settings.section'])
+
+  // A host that does not declare the seat: nothing registers there and apply
+  // still succeeds, so the seat can never gate activation.
+  const absent = makeCtx({ services: [], slots: [] })
+  assert.equal(plugin.apply(absent.ctx), undefined)
+  assert.deepEqual(absent.registered, [])
+})
+
+test('the settings.section page renders the same card component as the row page', () => {
+  const plugin = loadClientPlugin()
+  const { ctx, registered } = makeCtx({
+    services: ['configForms'],
+    slots: ['settings.section', 'plugins.row.config'],
+  })
+  plugin.apply(ctx)
+  const section = registered.find((item) => item.options.name === 'settings.section')
+  const row = registered.find((item) => item.options.name === 'plugins.row.config')
+  assert.ok(section, 'expected a settings.section occupant')
+  assert.ok(row, 'expected a plugins.row.config occupant')
+
+  // The section owner shares `close` and nothing else ...
+  const sectionPage = section.component({ close: () => {} })
+  const rowPage = row.component({ view: 'page' })
+  // ... and it renders the SAME component the row seat renders for view=page:
+  // one settings UI, one read path, one write path.
+  assert.equal(typeof sectionPage.type, 'function')
+  assert.equal(sectionPage.type, rowPage.type)
+  assert.equal(sectionPage.props.scope, rowPage.props.scope)
+  // neither `close` nor the host-owned optional `form` prop is consumed. The only
+  // extra prop is the disclosure default: this page holds ONE card, so it must
+  // start expanded (pinned behaviourally below).
+  assert.deepEqual(Object.keys(sectionPage.props).sort(), ['api', 'defaultOpen', 'scope'])
+  const passedForm = section.component({ close: () => {}, form: { state: {}, mutate() {} } })
+  assert.equal(passedForm.type, sectionPage.type)
+  assert.equal(passedForm.props.scope, sectionPage.props.scope)
+  // a one-liner is still what the row seat's summary branch renders
+  assert.equal(row.component({ view: 'summary' }).type, 'span')
+})
+
+// ── the card's disclosure default: expanded where the card renders alone ────
+//
+// Two seats put this ONE card on a page of its own — the row seat's
+// `view === 'page'` branch and the additive `settings.section` page — so its body
+// must start expanded there, while the header button keeps folding it back up. The
+// legacy ≤ 0.1.5 `settings.plugin.item` card still sits in the Plugins list beside
+// many other cards, so it keeps the collapsed default. The card here is the REAL
+// SettingsCard and these hooks are a minimal host that keeps one state slot per
+// useState/useReducer call across render passes, so `header.onClick` followed by a
+// re-render IS the user's click: no source-text matching is involved.
+function createHookHost() {
+  let state = []
+  let cursor = 0
+  return {
+    hooks: {
+      useState(initial) {
+        const index = cursor++
+        if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial
+        const set = (next) => { state[index] = typeof next === 'function' ? next(state[index]) : next }
+        return [state[index], set]
+      },
+      useReducer(reducer, initial) {
+        const index = cursor++
+        if (!(index in state)) state[index] = initial
+        const dispatch = (action) => { state[index] = reducer(state[index], action) }
+        return [state[index], dispatch]
+      },
+      useEffect() { cursor++; return undefined },
+      useRef(current) { cursor++; return { current } },
+      useCallback(fn) { cursor++; return fn },
+      useMemo(fn) { cursor++; return fn() },
+    },
+    // a FRESH mount: React would own new state slots for a new card instance
+    mount() { state = []; cursor = 0 },
+    // one render pass: hook slots are addressed from 0 again, state survives
+    render(component, props) { cursor = 0; return component(props) },
+  }
+}
+
+test('the card body starts expanded on both single-card pages and the header still collapses it', () => {
+  const host = createHookHost()
+  const plugin = loadClientPlugin(host.hooks)
+  const { ctx, registered } = makeCtx({
+    services: ['configForms'],
+    slots: ['settings.section', 'plugins.row.config'],
+  })
+  plugin.apply(ctx)
+  const section = registered.find((item) => item.options.name === 'settings.section')
+  const row = registered.find((item) => item.options.name === 'plugins.row.config')
+
+  for (const [seat, element] of [
+    ['settings.section', section.component({ close: () => {} })],
+    ["plugins.row.config view='page'", row.component({ view: 'page' })],
+  ]) {
+    // the seat asks for the expanded disclosure ...
+    assert.equal(element.props.defaultOpen, true, `${seat} must ask for an expanded card`)
+
+    host.mount()
+    const page = host.render(element.type, element.props)
+    // SettingsCard returns one Fragment holding the single card element
+    const card = page.children[0]
+    // ... and the first render shows it open: body present, aria-expanded true
+    assert.equal(card.props.className, 'dscCard dscCardOpen', `${seat} must start expanded`)
+    assert.equal(card.children[0].props['aria-expanded'], true)
+    assert.equal(card.children[1].props.className, 'dscCardBody')
+
+    // the manual toggle still folds it back up
+    card.children[0].props.onClick()
+    const collapsed = host.render(element.type, element.props).children[0]
+    assert.equal(collapsed.props.className, 'dscCard', `${seat} must collapse on the header click`)
+    assert.equal(collapsed.children[0].props['aria-expanded'], false)
+    assert.ok(!collapsed.children[1], `${seat} must render no body once collapsed`)
+  }
+
+  // the legacy ≤ 0.1.5 seat is untouched: its card still sits in the Plugins list
+  // of many cards, which is the reason the collapsed default existed, so it asks
+  // for nothing and starts collapsed there.
+  const { ctx: legacyCtx, registered: legacyRegistered } = makeCtx({
+    services: ['settingsScope'],
+    slots: ['settings.plugin.item'],
+  })
+  loadClientPlugin(host.hooks).apply(legacyCtx)
+  const legacy = legacyRegistered[0]
+  assert.equal(legacy.options.name, 'settings.plugin.item')
+  const legacyElement = legacy.component()
+  assert.equal(legacyElement.props.defaultOpen, undefined, 'the legacy list seat asks for nothing')
+  host.mount()
+  const legacyCard = host.render(legacyElement.type, legacyElement.props).children[0]
+  assert.equal(legacyCard.props.className, 'dscCard')
+  assert.ok(!legacyCard.children[1], 'the legacy list card starts collapsed')
 })
 
 test('client hard-gates on no version-dependent settings service', () => {
@@ -270,7 +516,11 @@ test('selector matches main model typography and exposes effort selection', () =
 
 test('settings card is collapsed by default and combines provider with model selection', () => {
   assert.match(client, /子代理指挥 \/ Subagent Conductor/)
-  assert.match(client, /const \[open, setOpen\] = React\.useState\(false\)/)
+  // The disclosure default is SEAT-owned: the card starts from `defaultOpen`, so
+  // the legacy Plugins-list registration (which passes nothing) stays collapsed
+  // while the two single-card seats pass `defaultOpen: true`. The behavioural
+  // guard with the real SettingsCard lives in the disclosure test below.
+  assert.match(client, /const \[open, setOpen\] = React\.useState\(defaultOpen === true\)/)
   assert.match(client, /'aria-expanded': open/)
   assert.match(client, /open && e\('div', \{ className: 'dscCardBody' \}/)
   assert.match(client, /默认提供商与模型/)
