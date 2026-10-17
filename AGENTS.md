@@ -4,6 +4,10 @@
 
 - This package is an independently published Host+Web Cordis bundle: a **settings and default-route layer over the official subagent tools** (0.2.x, DSH 0.1.2-rc.1+). It owns a Settings namespace, a composer per-root-session selector, role templates, and one Host request listener.
 - It does NOT delegate: no own tool, no private AgentOptions marker, no wrapping of `ctx.subagents.*`, no replacement of stock `subagent` / `subagent_fork` rows, no agent-preset copies.
+- **Overlap with `@deepseek-ai/dsh-client-ui-settings-subagent` is deliberate, and it was never a 0.2.1 regression.** That official page has shipped since 0.1.7-alpha.1 (2026-09-22) and is byte-identical in `lib/client.js` between 0.1.7-rc.2 and 0.2.1-rc.2 (measured: 38477 bytes, the same two editable fields `maxActiveSubagents` / `maxDepth`). The two surfaces answer DIFFERENT questions and must not be merged:
+  - the official page owns the **agent loop's own limits** — how deep delegation may recurse and how many children may run at once (one value per deployment);
+  - this bundle owns the **route a child is given** — which provider/model/effort a subagent request resolves to, at root-session, role and global scope, plus the composer selector that sets it per session.
+  A host can carry both without either shadowing the other. Do not "resolve" the overlap by deleting the route layer, and do NOT add depth or concurrency fields here — those belong to the official page, and duplicating them would create two sources of truth for one limit.
 - It mounts once in the Host composition. Never copy its row into an agent preset: settings registration and the request listener are single-instance Host capabilities.
 - Historical: `HANDOFF.md` documents the superseded 0.1.x plan (own `subagent_direct` tool + marker semantics). Do not implement from it; v0.2 contracts live here and in `docs/design.md`.
 

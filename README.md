@@ -26,6 +26,19 @@ Provider, model, and reasoning effort resolve independently through those layers
 
 The official layer is read from the child's creation-time `AgentOptions` snapshot (`provider` / `model` / `reasoningEffort`). That snapshot already contains explicit model-facing tool arguments, tool-instance config defaults, or the parent route copied at creation, so the listener needs no private marker and has no cold-resume special case: the same deterministic precedence applies to fresh, nested, and cold-resumed children.
 
+### Relationship to the official subagent settings page
+
+DSH ships `@deepseek-ai/dsh-client-ui-settings-subagent` (since 0.1.7-alpha.1, unchanged through 0.2.1-rc.2), which edits the agent loop's **limits**: `maxDepth` (how deep delegation may recurse) and `maxActiveSubagents` (how many children may run at once). That is a different question from this bundle's:
+
+| | official subagent page | this bundle |
+|---|---|---|
+| question | how much delegation is allowed | which route a child gets |
+| scope | one value for the deployment | per root session / role / global |
+| fields | `maxDepth`, `maxActiveSubagents` | `provider`, `model`, `reasoningEffort` |
+| surface | Settings page | Settings page + composer selector |
+
+Both may be installed together; neither shadows the other. This bundle deliberately declares **no** depth or concurrency fields — duplicating a limit would create two sources of truth for one value.
+
 ## Composer selector
 
 The selector renders on the left of the main model seat (`conversation.input.right`). It picks one provider/model (and optionally a reasoning effort) **per root session**: root and child views resolve the same key through the official session-summary lineage (`origin` / `parentId`) and fail closed instead of writing a child-only key. It labels the effective source of each value (default role / root-session / global default / official-or-native) and writes through the revision-aware official Settings API.
