@@ -2,48 +2,127 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import plugin from '../lib/index.js'
 import { findRootSessionId, isSubagent, validateSettings } from '../lib/config.js'
 
-const here = path.dirname(fileURLToPath(import.meta.url))
-// These DSH white-box tests inspect the locally installed DSH implementation.
-// A public package CI runner has no DSH checkout, so require an explicit
-// opt-in path and skip only those checks when it is unavailable. Never guess
-// a host path: on POSIX, a Windows path would become a bogus relative path.
+// These DSH white-box guards inspect the locally installed DSH implementation.
+// A public package CI runner has no DSH checkout, so require an explicit opt-in
+// path and skip only those checks when it is unavailable. Never guess a host
+// path: on POSIX, a Windows path would become a bogus relative path.
+//
+// Plain Node cannot read an app.asar install (fs.stat/readdir fail there), so an
+// asar DSH_CHECKOUT skips under `npm test`. Run the same file through Electron's
+// Node mode (`ELECTRON_RUN_AS_NODE=1 <app.exe> --test --test-isolation=none`) to
+// execute these guards against an installed desktop asar.
 const dshRoot = typeof process.env.DSH_CHECKOUT === 'string' && process.env.DSH_CHECKOUT.length > 0
   ? path.resolve(process.env.DSH_CHECKOUT)
   : undefined
-const subagentImpl = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-subagent/lib/index.js')
-const agentImpl = dshRoot && path.join(dshRoot, 'node_modules/@deepseek-ai/dsh-agent/lib/index.js')
-const readDshFile = (file) => file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined
 
-test('DSH resolves the child AgentOptions route at creation (official layer source)', { skip: !subagentImpl || !fs.existsSync(subagentImpl) }, () => {
-  const source = readDshFile(subagentImpl)
-  // Provider/model (and effort when supplied) become child options before the
-  // first request; the Host conductor reads that snapshot as the official
-  // layer. Explicit model-facing choices and tool-instance defaults both land
-  // here, so the listener never needs a private marker.
-  assert.match(source, /resolveChildAgentOptions\(parent, request\.agentOptions, childDepth\)/)
-  assert.match(source, /agentProvider = agentOptions\.provider/)
-  assert.match(source, /agentReasoningEffort = agentOptions\.reasoningEffort/)
-  assert.doesNotMatch(source, /__dshSubagentConductor/)
+function hostDir(packageName) {
+  if (dshRoot === undefined) return undefined
+  const dir = path.join(dshRoot, 'node_modules', '@deepseek-ai', packageName)
+  return fs.existsSync(dir) ? dir : undefined
+}
+
+// Concatenate one installed package's JavaScript sources. The guards below are
+// CONTRACT checks: they look for the host's own vocabulary (event names, API
+// calls, guard messages) wherever THIS version keeps it, so a module moving
+// between `lib/index.js` and `lib/types/*.js` cannot make a valid host look
+// broken. Asserting one fixed file layout is what made the previous guards
+// stale on 0.2.x.
+function hostSources(packageName) {
+  const dir = hostDir(packageName)
+  if (dir === undefined) return undefined
+  const parts = []
+  const walk = (current) => {
+    let entries
+    try { entries = fs.readdirSync(current, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.(?:js|mjs|cjs)$/.test(entry.name)) {
+        try { parts.push(fs.readFileSync(full, 'utf8')) } catch { /* an unreadable file is not a contract hit */ }
+      }
+    }
+  }
+  walk(path.join(dir, 'lib'))
+  return parts.length === 0 ? undefined : parts.join('\n')
+}
+
+function hostVersion() {
+  if (dshRoot === undefined) return undefined
+  const candidates = [path.join(dshRoot, 'package.json'), path.join(dshRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')]
+  for (const file of candidates) {
+    try {
+      if (!fs.existsSync(file)) continue
+      const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
+      if (typeof manifest.version === 'string' && manifest.version.length > 0) return manifest.version
+    } catch { /* a malformed manifest is simply not a version source */ }
+  }
+  return undefined
+}
+
+const agentSource = hostSources('dsh-agent')
+const loopSource = hostSources('dsh-agent-loop')
+const subagentSource = hostSources('dsh-subagent')
+const version = hostVersion()
+const readable = agentSource !== undefined && loopSource !== undefined && subagentSource !== undefined
+// The plugin supports `>=0.1.2-rc.1 <0.3.0-0` and splits its routing on ONE host
+// capability: a durable `agent.model.select()` usable from the awaited
+// `agent/created` boundary. Which release first shipped it inside that range is
+// NOT verified, so this guard branches on the INSTALLED host's own vocabulary
+// instead of guessing a version boundary — the detected version is printed in
+// each test name and diagnostic. Sampled evidence: 0.1.7-rc.2 (request waterfall,
+// no durable selection) and 0.2.2-rc.1 (creation-time selection).
+const durableSelection = agentSource !== undefined && /session\.append\(["']model\/selection["']/.test(agentSource)
+const hostIdentity = version === undefined ? 'unknown-version host' : `DSH ${version}`
+const unreadable = 'set DSH_CHECKOUT to a DSH install root this process can read (plain Node cannot read app.asar)'
+const skipCreation = readable ? (durableSelection ? false : `${hostIdentity} records no durable model selection`) : unreadable
+const skipLegacy = readable ? (durableSelection ? `${hostIdentity} records a durable model selection` : false) : unreadable
+
+test(`${hostIdentity}: creation-time routing contract (durable model selection)`, { skip: skipCreation }, (t) => {
+  t.diagnostic(`${hostIdentity} detects a durable model selection; asserting the creation-time boundary`)
+  // The conductor reads the official layer from the child's creation-time
+  // AgentOptions snapshot, so the Host must still resolve it there.
+  assert.match(subagentSource, /resolveChildAgentOptions\(parent, request\.agentOptions, childDepth\)/, `${hostIdentity}: child AgentOptions are no longer resolved at creation`)
+  // Creation routing is legal only because listeners of `agent/created` complete
+  // before the child is announced as created / its first input is admitted.
+  assert.match(agentSource, /\bserial\([^)]*["']agent\/created["']/, `${hostIdentity}: agent/created is no longer a serial (awaited) dispatch`)
+  // `agent.model.select()` must record a durable selection event; without it the
+  // creation-time route could not survive into step preparation.
+  assert.match(agentSource, /session\.append\(["']model\/selection["']/, `${hostIdentity}: model selection is no longer recorded durably`)
+  // The step fixes its selection before `agent/request`, and a late rewrite is a
+  // hard error — which is why the request listener must stay inert here.
+  assert.match(loopSource, /waterfall\(["']agent\/request["']/, `${hostIdentity}: agent/request is no longer a waterfall`)
+  assert.match(loopSource, /use agent\.model\.select\(\) before step preparation/, `${hostIdentity}: a late agent/request model change is no longer rejected`)
 })
 
-test('DSH dispatches agent/request as a waterfall with resolved config', { skip: !agentImpl || !fs.existsSync(agentImpl) }, () => {
-  const source = readDshFile(agentImpl)
-  assert.match(source, /agentCtx\.on\("agent\/request", async \(_payload, next\) => \{/)
-  assert.match(source, /const resolved = await next\(\)/)
+test(`${hostIdentity}: request-waterfall routing contract (no durable model selection)`, { skip: skipLegacy }, (t) => {
+  t.diagnostic(`${hostIdentity} has no durable model selection; asserting the legacy waterfall boundary`)
+  // This is the seam the guarded legacy listener targets. On these hosts there is
+  // no durable model selection, so the waterfall is the only place a route can be
+  // applied at all.
+  assert.match(agentSource, /agentCtx\.on\(["']agent\/request["'], async \(_payload, next\) => \{/, `${hostIdentity}: the legacy agent/request waterfall is gone`)
+  assert.match(agentSource, /const resolved = await next\(\)/, `${hostIdentity}: agent/request no longer resolves the official config`)
+  assert.doesNotMatch(agentSource, /["']model\/selection["']/, `${hostIdentity}: a durable selection appeared here, so the legacy-only contract no longer describes this host`)
 })
 
-test('conductor source carries no private marker or delegation tool', () => {
+test('conductor keeps stock tools and AgentOptions free of private markers', () => {
   const index = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
   const config = fs.readFileSync(new URL('../lib/config.js', import.meta.url), 'utf8')
+  const roles = fs.readFileSync(new URL('../lib/roles.js', import.meta.url), 'utf8')
   const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  for (const source of [index, config, client]) {
+  for (const source of [index, config, roles, client]) {
     assert.doesNotMatch(source, /__dshSubagentConductor|MARKER_KEY|makeMarker|readMarker|subagent_direct/)
     assert.doesNotMatch(source, /ctx\.subagents\.start\s*=|ctx\.subagents\.startContinuable\s*=/)
   }
+  // Role delegation goes through the official managed activation service, and the
+  // only tools this package registers are its own two role tools — never a copy or
+  // re-registration of the stock delegation tool.
+  assert.match(roles, /sctx\.subagents\.startActivation\(/)
+  assert.match(roles, /name: 'list_subagent_roles'/)
+  assert.match(roles, /name: 'subagent_role'/)
+  assert.equal((roles.match(/tools\.register\(/g) || []).length, 1)
 })
 
 test('cold-resumed and fresh children are detected by origin without any marker', () => {

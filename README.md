@@ -4,15 +4,17 @@
 
 **Portable settings transport** — the plugin now resolves its settings scope on both the `settingsScope` (≤ 0.1.5) and `configForms` (≥ 0.1.7-rc.1) hosts, so the composer selector and Settings card keep working across the rename.
 
-Lifecycle-safe subagent routing settings for DeepSeek Harness Web: per-root-session provider/model/reasoning-effort selection in the composer, role templates with a visual editor, and a global default route. It does not patch DSH, does not replace or wrap the stock `subagent` / `subagent_fork` tools, and does not register its own delegation tool.
+Lifecycle-safe subagent routing settings for DeepSeek Harness Web: per-root-session provider/model/reasoning-effort selection in the composer, role templates with a visual editor, and a global default route. It does not patch DSH, does not replace or wrap the stock `subagent` / `subagent_fork` tools, and adds explicit role delegation through `subagent_role` using the official managed activation service.
 
 ## 中文
 
-面向 DeepSeek Harness Web 官方子代理工具（`subagent` / `subagent_fork`）的设置与默认路由层：输入框根会话选择、角色模板与全局默认路由。不修改 DSH、不替换官方工具、不注册自有委派工具、不使用私有 marker。
+面向 DeepSeek Harness Web 官方子代理工具（`subagent` / `subagent_fork`）的设置与默认路由层：输入框根会话选择、角色模板与全局默认路由。新增 `subagent_role` 显式角色委派：使用角色模型与预置提示词，并接受当前任务和补充要求。复用官方子代理生命周期，不修改或替换官方工具。
 
 ## How it works
 
-Delegation and explicit model selection belong to the official tools. Conductor only provides layers that run **before** the official choice at every subagent request boundary:
+For ordinary `subagent` and `subagent_fork` calls, the official tools own delegation and Conductor applies its default routing layers. On current hosts, Conductor validates and records the route with `agent.model.select()` during awaited `agent/created` initialization, before model, tools and prompt preparation. The prepared request is never rerouted. Legacy hosts without this API retain their request listener.
+
+设置变更对之后新建或重新加载的子代理生效；已加载子代理继续使用已选路由。不会在请求准备完成后切换模型。优先级保持不变：
 
 ```text
 root-session composer selection
@@ -24,7 +26,7 @@ root-session composer selection
 
 Provider, model, and reasoning effort resolve independently through those layers. The final provider/model pair is validated as one exact route through `llm.resolveModelInfo`; a conductor reasoning effort is applied only when that exact model publishes it in `reasoning.efforts`. When every conductor layer is empty the request is left exactly as the official flow produced it, so pure official/inherit delegation never changes. Invalid configured routes degrade with a Host warning and keep the official/inherited request intact — stock delegation never breaks.
 
-The official layer is read from the child's creation-time `AgentOptions` snapshot (`provider` / `model` / `reasoningEffort`). That snapshot already contains explicit model-facing tool arguments, tool-instance config defaults, or the parent route copied at creation, so the listener needs no private marker and has no cold-resume special case: the same deterministic precedence applies to fresh, nested, and cold-resumed children.
+The official layer is read from the child's creation-time `AgentOptions` snapshot (`provider` / `model` / `reasoningEffort`). That snapshot already contains explicit model-facing tool arguments, tool-instance config defaults, or the parent route copied at creation, so the routing decision needs no private marker and has no cold-resume special case: the same deterministic precedence applies to fresh, nested, and cold-resumed children.
 
 ### Relationship to the official subagent settings page
 
@@ -38,6 +40,27 @@ DSH ships `@deepseek-ai/dsh-client-ui-settings-subagent` (since 0.1.7-alpha.1, u
 | surface | Settings page | Settings page + composer selector |
 
 Both may be installed together; neither shadows the other. This bundle deliberately declares **no** depth or concurrency fields — duplicating a limit would create two sources of truth for one value.
+
+## Explicit role delegation / 显式角色委派
+
+On current Hosts with managed spawn activations and JSON storage, `list_subagent_roles` lists role ids, purposes and model routes. Supply `role_id` to inspect its preset guidance. `subagent_role` starts a fresh child:
+
+```json
+{
+  "role_id": "code-reviewer",
+  "task": "Review the settings changes and their callers.",
+  "additional_instructions": "Report confirmed issues with file locations.",
+  "description": "Review settings changes"
+}
+```
+
+Configure the role's `displayName`, short `description`, full `provider`/`model`, optional supported `reasoningEffort`, and multiline `instructions`. Description is discovery text; instructions are delivered as role guidance alongside the task and optional additional requirements. An omitted `reasoningEffort` means inherit: an unchanged provider/model keeps the current selection's effort, and a route change clears it. Existing roles receive empty instructions; selecting a default role for ordinary delegation only selects its route.
+
+显式调用使用角色的完整模型配置，不再参与根会话/默认角色/全局默认优先级竞争。角色不存在、模型不可用、思考强度不支持或模型不在宿主会话授权范围时明确失败。该入口仍遵循宿主委派限制，要求调用 scope 可用官方 `subagent`，并复用官方 `list_agents`、`send_message` 和中断管理。
+
+A versioned snapshot is saved under the reserved child id before activation, using the Host JSON storage backend. It includes the role guidance and route hash. Concurrent calls have independent bindings. Editing or deleting a role affects future children only; continuation and cold resume retain the bound route. Initial guidance and task are persisted by the official activation inbox. Unloading this plugin removes its tools; keep it enabled when resuming role-bound children. Storage migration and session export must retain the plugin binding unit as well as the Session log. If binding storage cannot load, role tools are withdrawn with a Host warning; ordinary routing remains available, and role-bound recovery is degraded until storage is restored. A failed start may leave a dormant binding deliberately, because partial acceptance can be recoverable.
+
+Role guidance is task context, not an elevated permission or a tool restriction. A request such as “read only” describes the task; enforce actual tool restrictions through the Host/preset when required. No Gate-specific rules are built into the plugin.
 
 ## Composer selector
 
@@ -88,7 +111,7 @@ Local development, from this package directory:
 dsh plugin --profile web add .
 ```
 
-Either form records the package in the profile's `dsh.profile.bundles`, which is what mounts the Host request listener and serves the client bundle.
+Either form records the package in the profile's `dsh.profile.bundles`, which is what mounts the Host routing listeners and serves the client bundle.
 
 ## Development
 

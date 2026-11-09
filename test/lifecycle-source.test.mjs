@@ -8,6 +8,7 @@ import vm from 'node:vm'
 // LF tree stays green.
 const host = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const config = fs.readFileSync(new URL('../lib/config.js', import.meta.url), 'utf8')
+const roles = fs.readFileSync(new URL('../lib/roles.js', import.meta.url), 'utf8')
 const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
 const patch = fs.readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8')
@@ -114,20 +115,32 @@ test('bundle patch inserts only the conductor row', () => {
   assert.doesNotMatch(effective, /disable:|replace:|tool-subagent|agent preset/i)
 })
 
-test('host uses one request listener, no delegation tool, no marker', () => {
+test('host selects at initialization with a guarded legacy request listener', () => {
+  assert.equal((host.match(/ctx\.on\('agent\/created'/g) || []).length, 1)
+  assert.match(host, /agent\.model\.select\(/)
+  assert.match(host, /typeof payload\?\.agent\?\.model\?\.select === 'function'\) return base/)
   assert.equal((host.match(/ctx\.on\('agent\/request'/g) || []).length, 1)
+  // The host ENTRY owns no tool: the two role tools live in lib/roles.js, behind
+  // the non-gating service injection, and replace no stock tool.
   assert.doesNotMatch(host, /tools\.register/)
+  assert.match(roles, /sctx\.tools\.register/)
+  assert.match(roles, /name: 'list_subagent_roles'/)
+  assert.match(roles, /name: 'subagent_role'/)
+  assert.doesNotMatch(roles, /subagents\.start\s*=/)
   assert.doesNotMatch(host, /subagents\.start\s*=/)
   assert.doesNotMatch(host, /subagents\.startContinuable\s*=/)
   assert.doesNotMatch(host, /subagent\/provider-added|subagent\/provider-removed/)
-  assert.doesNotMatch(host, /__dshSubagentConductor|MARKER_KEY/)
+  assert.doesNotMatch(host + roles, /__dshSubagentConductor|MARKER_KEY/)
   assert.match(host, /settings\.register\(SETTINGS_NAMESPACE/)
   assert.match(host, /ctx\.llm\.resolveModelInfo/)
 })
 
 test('linked runtime imports no DSH or Cordis peer package', () => {
-  assert.doesNotMatch(host + config, /from ['"]@deepseek-ai\/(?:dsh-|cordis)/)
+  assert.doesNotMatch(host + config + roles, /from ['"]@deepseek-ai\/(?:dsh-|cordis)/)
   assert.match(host, /from ['"]@deepseek-ai\/schemastery['"]/)
+  // lib/roles.js must not declare an activation gate of its own: its services are
+  // awaited inside apply, so a host without them keeps ordinary routing alive.
+  assert.doesNotMatch(roles, /export const inject/)
 })
 
 test('config exposes only v2 helpers', () => {

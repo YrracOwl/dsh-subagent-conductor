@@ -132,7 +132,7 @@ test('normalization drops v1-only keys and invalid session selections', () => {
   assert.equal('enableRunInBackground' in value, false)
   assert.equal('backgroundMode' in value, false)
   assert.deepEqual(value.defaultRoute, { provider: 'p', model: 'm' })
-  assert.deepEqual(value.roles.ok, { displayName: 'Ok', description: 'Fine' })
+  assert.deepEqual(value.roles.ok, { displayName: 'Ok', description: 'Fine', instructions: '' })
   assert.deepEqual(value.sessionSelections, { ok: { provider: 'p', model: 'm' } })
   assert.ok(!('fallbackOnInvalid' in DEFAULT_SETTINGS))
 })
@@ -181,7 +181,7 @@ test('default export carries a Config schema with the legacy shape and defaults'
   assert.deepEqual(plain(result.value.sessionSelections), {})
   assert.equal(unwrap(result.value.defaultRole), undefined)
   assert.deepEqual(Object.keys(plugin.Config.dict.defaultRoute.dict), ['provider', 'model', 'reasoningEffort'])
-  assert.deepEqual(Object.keys(plugin.Config.dict.roles.inner.dict), ['displayName', 'description', 'provider', 'model', 'reasoningEffort'])
+  assert.deepEqual(Object.keys(plugin.Config.dict.roles.inner.dict), ['displayName', 'description', 'instructions', 'provider', 'model', 'reasoningEffort'])
 })
 
 test('a volatile field parses to a cosmokit wrapper this plugin unwraps', () => {
